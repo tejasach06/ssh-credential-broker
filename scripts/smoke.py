@@ -103,7 +103,7 @@ def main():
                 Path("/run/sshd").mkdir(mode=0o755)
                 made_sshd_dir = True
             config = work / "sshd_config"
-            config.write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {work / 'host_key'}\nPidFile {work / 'sshd.pid'}\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nPubkeyAuthentication no\nPermitEmptyPasswords no\nPermitRootLogin no\nUsePAM {'yes' if DARWIN else 'no'}\nAllowUsers {login}\nAllowTcpForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitTTY yes\nLogLevel VERBOSE\n")
+            config.write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {work / 'host_key'}\nPidFile {work / 'sshd.pid'}\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nPubkeyAuthentication no\nPermitEmptyPasswords no\nPermitRootLogin no\nUsePAM no\nAllowUsers {login}\nAllowTcpForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitTTY yes\nLogLevel VERBOSE\n")
             run(["/usr/sbin/sshd", "-t", "-f", config])
             with (work / "sshd.log").open("wb") as log:
                 sshd = subprocess.Popen(["/usr/sbin/sshd", "-D", "-e", "-f", str(config)], stdout=log, stderr=log)
@@ -164,7 +164,7 @@ def main():
                 assert result.returncode == 0 and result.stdout == b"COMMAND_OK", f"next ordered credential failed: rc={result.returncode}, stdout={result.stdout!r}, stderr={result.stderr!r}"
                 assert b"Failed password" in observed_auth and b"Accepted password" in observed_auth, "fixture did not observe the ordered rejected and accepted authentications"
                 expect_error(execute(), "BUDGET_EXHAUSTED")
-                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "5")
+                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "10")
                 # Invalid outcome descriptors must be rejected before authentication or command work.
                 auth_before = len(re.findall(rb"(Failed|Accepted) password", (work / "sshd.log").read_bytes()))
                 marker = Path("/tmp") / ("broker-smoke-outcome-" + token)
