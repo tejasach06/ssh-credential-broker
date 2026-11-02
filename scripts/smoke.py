@@ -19,6 +19,7 @@ import struct
 import subprocess
 import tempfile
 import termios
+import textwrap
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -156,8 +157,8 @@ def main():
                 def ctl(*arguments, data=None):
                     return run([INSTALLED / "brokerctl", "--admin-socket", RUNTIME / "admin.sock", *arguments], input=data)
 
-                def execute(command="true", data=b""):
-                    return subprocess.run([str(INSTALLED / "broker-ssh"), "--socket", str(RUNTIME / "exec.sock"), "127.0.0.1", "--port", str(port), "--", command], input=data, capture_output=True, preexec_fn=drop, timeout=40)
+                def execute(command="true", data=b"", timeout=40):
+                    return subprocess.run([str(INSTALLED / "broker-ssh"), "--socket", str(RUNTIME / "exec.sock"), "127.0.0.1", "--port", str(port), "--", command], input=data, capture_output=True, preexec_fn=drop, timeout=timeout)
 
                 def expect_error(result, code):
                     assert result.returncode == 125, f"expected local error {code}"
@@ -190,7 +191,38 @@ def main():
                 observed_auth = (work / "sshd.log").read_bytes()
                 assert b"Failed password" in observed_auth and b"Accepted password" in observed_auth, "fixture did not observe the ordered rejected and accepted authentications"
                 expect_error(execute(), "BUDGET_EXHAUSTED")
-                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "3")
+                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "6")
+                # Invalid outcome descriptors must be rejected before authentication or command work.
+                auth_before = len(re.findall(rb"(Failed|Accepted) password", (work / "sshd.log").read_bytes()))
+                marker = Path("/tmp") / ("broker-smoke-outcome-" + token)
+                assert not marker.exists(), "fixture marker collision"
+                read_only = os.open("/dev/null", os.O_RDONLY)
+                try:
+                    for descriptor, inherited in ((999999, ()), (read_only, (read_only,))):
+                        invalid = subprocess.run([str(INSTALLED / "broker-ssh"), "--outcome-fd", str(descriptor), "--socket", str(RUNTIME / "exec.sock"), "127.0.0.1", "--port", str(port), "--", f"printf UNEXPECTED > {marker}"], input=b"", capture_output=True, pass_fds=inherited, preexec_fn=drop, timeout=5)
+                        expect_error(invalid, "LOCAL_IO")
+                        assert not marker.exists(), "invalid outcome descriptor allowed remote command work"
+                finally:
+                    os.close(read_only)
+                    marker.unlink(missing_ok=True)
+                assert auth_before == len(re.findall(rb"(Failed|Accepted) password", (work / "sshd.log").read_bytes())), "invalid outcome descriptor consumed a password submission"
+                custom_signal = execute("kill -USR2 $$")
+                assert custom_signal.returncode == 128 + int(signal.SIGUSR2), "custom remote signal exit code was not mapped for the native platform"
+                signal_outcome = json.loads(custom_signal.stderr)
+                assert signal_outcome["outcome"] == "remote_signal" and signal_outcome["code"] == "REMOTE_SIGNAL" and signal_outcome["signal"] == "USR2", "custom remote signal was not preserved"
+                # Reporting failure after a real remote result must be classified as local I/O failure.
+                read_end, broken_outcome = os.pipe()
+                os.close(read_end)
+                try:
+                    failed_report = subprocess.run([str(INSTALLED / "broker-ssh"), "--outcome-fd", str(broken_outcome), "--socket", str(RUNTIME / "exec.sock"), "127.0.0.1", "--port", str(port), "--", "true"], input=b"", capture_output=True, pass_fds=(broken_outcome,), preexec_fn=drop, timeout=20)
+                    expect_error(failed_report, "LOCAL_IO")
+                finally:
+                    os.close(broken_outcome)
+                # Outgoing input exceeds SSH windows while concurrent output drains and the peer
+                # deliberately stops reading for longer than the establishment timeout.
+                slow_input = bytes(range(256)) * 32768
+                slow = execute("dd if=/dev/zero bs=65536 count=64 2>/dev/null; sleep 35; cat", slow_input, timeout=60)
+                assert slow.returncode == 0 and slow.stdout == bytes(4 * 1024 * 1024) + slow_input and slow.stderr == b"", "established stdin backpressure timed out or full-duplex bytes were corrupted"
                 binary = bytes(range(256)) * 4096
                 result = execute("cat; printf STDERR_OK >&2; exit 7", binary)
                 assert result.returncode == 7 and result.stdout == binary and result.stderr == b"STDERR_OK", "binary streams, EOF, or remote exit were corrupted"
@@ -268,18 +300,79 @@ def main():
                     raced.append((racer.returncode, out, err))
                 assert sorted(item[0] for item in raced) == [0, 125], "concurrent cached logins exceeded one remaining attempt"
                 assert json.loads(next(item[2] for item in raced if item[0] == 125))["code"] == "BUDGET_EXHAUSTED"
-                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
-                active = spawn("printf ACTIVE_SESSION; sleep 120")
+                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "2")
+                # This is the real execution socket and a real SSH command. A separate harness
+                # process deliberately leaves output unread, then checks every framed response.
+                raw_probe = textwrap.dedent("""
+                    import json, select, socket, struct, sys, time
+                    connection = socket.socket(socket.AF_UNIX)
+                    connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+                    connection.settimeout(10)
+                    connection.connect(sys.argv[1])
+                    request = {"Connect": {"version": 1, "target": "127.0.0.1", "port": int(sys.argv[2]), "command": "dd if=/dev/zero bs=65536 count=128 2>/dev/null; sleep 120", "pty": None}}
+                    payload = json.dumps(request).encode()
+                    connection.sendall(struct.pack(">I", len(payload)) + payload)
+                    deadline = None
+                    def exact(length):
+                        result = bytearray()
+                        while len(result) < length:
+                            if deadline is not None:
+                                remaining = deadline - time.monotonic()
+                                assert remaining > 0, "revocation output did not drain before the deadline"
+                                connection.settimeout(remaining)
+                            chunk = connection.recv(length - len(result))
+                            assert chunk, "execution response contained a truncated frame"
+                            result.extend(chunk)
+                        return bytes(result)
+                    def frame():
+                        length = struct.unpack(">I", exact(4))[0]
+                        assert 0 < length <= 65536, "execution response frame length was corrupted"
+                        return json.loads(exact(length))
+                    assert frame() == "SessionReady", "raw execution session did not open"
+                    assert select.select([connection], [], [], 10)[0], "raw execution command emitted no output"
+                    time.sleep(1)
+                    print("BACKPRESSURE_READY", flush=True)
+                    assert sys.stdin.buffer.read(1) == b"D", "operator did not resume draining"
+                    deadline = time.monotonic() + 4
+                    frames = 0
+                    received = 0
+                    while True:
+                        message = frame()
+                        frames += 1
+                        assert isinstance(message, dict), "unexpected execution control response"
+                        if "StdoutData" in message:
+                            data = message["StdoutData"]
+                            assert isinstance(data, list) and not any(data), "remote output bytes were corrupted"
+                            received += len(data)
+                        elif "StderrData" in message:
+                            assert message["StderrData"] == [], "unexpected remote stderr"
+                        else:
+                            assert message.get("Error", {}).get("code") == "BROKER_LOCK", "revocation did not produce the classified lock outcome"
+                            break
+                    assert received > 0, "raw execution exercised no queued output"
+                    print(json.dumps({"frames": frames, "stdout_bytes": received, "code": "BROKER_LOCK"}), flush=True)
+                    connection.close()
+                """)
+                raw_client = subprocess.Popen([sys.executable, "-c", raw_probe, str(RUNTIME / "exec.sock"), str(port)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=drop)
+                active = None
                 try:
+                    assert select.select([raw_client.stdout], [], [], 15)[0], "raw execution did not reach output backpressure"
+                    assert raw_client.stdout.readline() == b"BACKPRESSURE_READY\n", "raw execution client failed before revocation"
+                    active = spawn("printf ACTIVE_SESSION; sleep 120")
                     assert select.select([active.stdout], [], [], 10)[0], "active command did not open"
                     assert os.read(active.stdout.fileno(), len(b"ACTIVE_SESSION")) == b"ACTIVE_SESSION"
                     ctl("lock")
+                    # Resume immediately, within the daemon's five-second bounded drain period.
+                    raw_output, raw_error = raw_client.communicate(input=b"D", timeout=6)
+                    assert raw_client.returncode == 0 and not raw_error, "backpressured revocation produced malformed, truncated, or late frames"
+                    assert json.loads(raw_output)["code"] == "BROKER_LOCK"
                     _, ended = active.communicate(timeout=10)
                     assert active.returncode == 125 and json.loads(ended)["code"] == "BROKER_LOCK", "lock did not revoke an active channel"
                 finally:
-                    if active.poll() is None:
-                        active.kill()
-                        active.wait(timeout=5)
+                    for client in (raw_client, active):
+                        if client is not None and client.poll() is None:
+                            client.kill()
+                            client.wait(timeout=5)
                 expect_error(execute(), "BROKER_LOCKED")
                 if DARWIN:
                     run(["launchctl", "kickstart", "-k", "system/com.ssh-credential-broker.daemon"])
@@ -322,6 +415,8 @@ def main():
                 expect_error(execute(), "BROKER_LOCKED")
                 assert password.encode() not in (work / "sshd.log").read_bytes(), "fixture secret appeared in server diagnostics"
                 report = {"platform": platform.platform(), "operator_uid": 0, "harness_uid": identity.pw_uid, "broker_uid": pwd.getpwnam("sshbroker").pw_uid, "result": "native smoke passed", "coverage": ["startup and restart locked", "private credential input", "pending approval", "verified host key and changed-key refusal", "ordered discovery and budget addition", "cached login budget", "cached rejection and explicit renewal", "concurrent cached single-budget login", "1MiB binary full duplex, EOF, remote status", "interactive shell, resize, and Ctrl-C", "username visibility", "harness admin denial", "native debugger denial", "binary replacement denial", "active-session lock and expiry"], "limits": "Partial acceptance coverage; not all A01-A31 or a complete isolation audit."}
+                report["coverage"].extend(["outcome descriptor preflight before authentication", "outcome write failure", "custom USR2 remote signal", "35-second stdin backpressure with concurrent large output"])
+                report["coverage"].append("framed lock outcome under real Unix-socket output backpressure")
     finally:
         cleanup_errors = []
         if installed:

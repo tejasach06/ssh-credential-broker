@@ -66,10 +66,13 @@ impl LocalIo {
         }
         let stat = unsafe { stat.assume_init() };
         let mode = stat.st_mode & libc::S_IFMT;
+        #[cfg(target_os = "macos")]
+        let device = stat.st_rdev as u64;
+        #[cfg(not(target_os = "macos"))]
+        let device = stat.st_rdev;
         // Only /dev/null is safe for synchronous character-device I/O.
         let null_device = mode == libc::S_IFCHR
-            && std::fs::metadata("/dev/null")
-                .is_ok_and(|metadata| metadata.rdev() == stat.st_rdev as u64);
+            && std::fs::metadata("/dev/null").is_ok_and(|metadata| metadata.rdev() == device);
         let regular = mode == libc::S_IFREG || null_device;
         if regular {
             return Ok(Self {
@@ -80,14 +83,15 @@ impl LocalIo {
         if unsafe { libc::fcntl(duplicated, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
             return Err(io::Error::last_os_error());
         }
-        match AsyncFd::new(owned) {
+        // SAFETY: OwnedFd keeps this descriptor open and fixed until deregistration.
+        match unsafe { AsyncFd::register(owned) } {
             Ok(ready) => Ok(Self {
                 descriptor: Descriptor::Ready(ready),
                 flags,
             }),
             Err(error) => {
                 unsafe { libc::fcntl(fd, libc::F_SETFL, flags) };
-                Err(error)
+                Err(error.into())
             }
         }
     }

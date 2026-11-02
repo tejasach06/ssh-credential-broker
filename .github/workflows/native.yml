@@ -14,7 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -31,11 +31,13 @@ jobs:
         run: cargo build --workspace --release --bins
       - name: Run isolated native SSH smoke
         run: sudo python3 scripts/smoke.py --bin-dir target/release
-      - name: Package native binaries
+      - name: Package native installation
         shell: bash
         run: |
-          mkdir -p release
-          tar -czf "release/ssh-credential-broker-$(uname -s)-$(uname -m).tar.gz" -C target/release ssh-brokerd broker-ssh brokerctl
+          mkdir -p release/package/bin
+          cp target/release/ssh-brokerd target/release/broker-ssh target/release/brokerctl release/package/bin/
+          cp -R scripts deploy README.md SECURITY.md CHANGELOG.md release/package/
+          tar -czf "release/ssh-credential-broker-$(uname -s)-$(uname -m).tar.gz" -C release/package .
           if [ "$(uname -s)" = Darwin ]; then
             shasum -a 256 release/*.tar.gz > release/SHA256SUMS
           else
@@ -44,5 +46,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: native-${{ runner.os }}-${{ runner.arch }}
-          path: release/
+          path: |
+            release/*.tar.gz
+            release/SHA256SUMS
           if-no-files-found: error

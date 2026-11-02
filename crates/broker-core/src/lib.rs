@@ -1,6 +1,8 @@
 //! Grant-owned authorization state. Network I/O belongs outside this module's state mutex.
 //! Commit closures must be short, nonblocking transport handoffs; returning an owned future
 //! is supported, but a future must not borrow the supplied credential.
+//! IPv4-mapped IPv6 destinations normalize to IPv4 so budgets and discovery gates
+//! cannot be bypassed by changing the numeric representation of one endpoint.
 use broker_proto::{Credential, PendingDestination};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -452,7 +454,8 @@ impl StateEngine {
             return Err(CoreError::InvalidInput("attempt budget must be positive"));
         }
         let address = pinned_ip
-            .parse()
+            .parse::<IpAddr>()
+            .map(canonical_address)
             .map_err(|_| CoreError::InvalidInput("approval requires a numeric address"))?;
         let id = Identity {
             address,
@@ -769,10 +772,16 @@ fn lock_credentials(credentials: &[Credential]) -> Vec<(usize, usize)> {
     let _ = credentials;
     locked
 }
+fn canonical_address(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(ip) => ip.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(address),
+        IpAddr::V4(_) => address,
+    }
+}
 fn alias(target: &str, port: u16) -> Alias {
     let target = target
         .parse::<IpAddr>()
-        .map(|ip| ip.to_string())
+        .map(|ip| canonical_address(ip).to_string())
         .unwrap_or_else(|_| target.trim_end_matches('.').to_ascii_lowercase());
     Alias { target, port }
 }
@@ -812,7 +821,8 @@ fn validate_destination(pending: &PendingDestination) -> Result<Identity, CoreEr
     }
     let address = pending
         .resolved_ip
-        .parse()
+        .parse::<IpAddr>()
+        .map(canonical_address)
         .map_err(|_| CoreError::InvalidInput("pending destination requires a numeric address"))?;
     Ok(Identity {
         address,

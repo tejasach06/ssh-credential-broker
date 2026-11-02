@@ -26,6 +26,8 @@ The credential pool exists only in memory. Passwords and usernames are not accep
 
 Each grant fixes its pool and authorized harness UID. Unlocking an active grant is rejected. Lock and expiry invalidate authorization before cancellation and clear credentials, approvals, budgets, cursors, and matches. Restart starts locked. Work that has not committed a password submission cannot submit after invalidation. An already committed submission may be in flight and remains charged. A completed authentication cannot create a channel after authorization is invalidated.
 
+Revocation disconnects SSH before execution output drains. The daemon permits at most five seconds to flush queued output and the classified lock or expiry result. A consumer that does not drain promptly can receive a socket close without that diagnostic. The bounded drain does not renew the grant or permit another password submission or channel.
+
 Before any username or password submission, the operator must approve the target's numeric destination, port, and SSH host-key fingerprint. Verify the fingerprint through an independent trusted source. Accepting a fingerprint supplied only by an untrusted harness or network does not establish server identity. Approvals last only for the grant. DNS aliases cannot bypass numeric pinning or create a separate budget for the same approved server identity. Changed host keys fail closed.
 
 Every password submission consumes budget, including a successful cached login. A password possibly transmitted before cancellation or transport failure remains consumed. Rejected credentials are not automatically retried within the grant. Cached rejection requires explicit operator renewal rather than scanning the rest of the pool. Budget and delay settings cannot guarantee protection from arbitrary server lockout policies.
@@ -41,6 +43,14 @@ Every password submission consumes budget, including a successful cached login. 
 - Disconnecting SSH cannot recall a password already delivered to a transport or remote server.
 
 There is no forwarding, agent forwarding, X11 forwarding, SFTP, SCP, arbitrary subsystem access, public-key fallback, or keyboard-interactive fallback. Remote sudo and application password prompts receive no automatic broker assistance.
+
+## Known dependency advisory
+
+The locked `rsa` version `0.10.0-rc.18` is affected by [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071.html). Upstream reports no patched version. This advisory concerns timing leakage during private RSA operations.
+
+The broker's current password-only client does not load or use a client private key. The enabled RSA feature supports verification of server host signatures. Static source review traced that path through Russh's client key exchange to `ssh-key` public-key verification and the RSA public exponent operation. The private-key signing and decryption paths implicated by the advisory are not reachable through the broker's exposed operations.
+
+RSA support remains enabled for servers that offer only RSA host keys. This is a scoped reachability assessment, not a patched-dependency claim or a blanket advisory suppression. Reassess the advisory before adding private-key authentication, signing, decryption, agent signing, a server role, or changing these dependencies.
 
 ## Diagnostics and verification
 

@@ -6,7 +6,8 @@ use broker_proto::{
     MAX_STREAM_DATA, PROTOCOL_VERSION,
 };
 use clap::Parser;
-use std::io::Write;
+use std::fs::File;
+use std::io::{self, Write};
 use std::os::fd::FromRawFd;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -56,7 +57,26 @@ impl Outcome {
     }
 }
 
-fn report(outcome: &Outcome, descriptor: Option<i32>) {
+fn outcome_file(descriptor: Option<i32>) -> io::Result<Option<File>> {
+    let Some(fd) = descriptor else {
+        return Ok(None);
+    };
+    let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+    if duplicated < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let file = unsafe { File::from_raw_fd(duplicated) };
+    let flags = unsafe { libc::fcntl(duplicated, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::O_ACCMODE == libc::O_RDONLY {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(Some(file))
+}
+
+fn report(outcome: &Outcome, descriptor: Option<&mut File>) -> io::Result<()> {
     let value = if let Some(error) = outcome.error {
         serde_json::json!({ "outcome": "client_error", "code": error.as_str(), "message": error.message() })
     } else if let Some(signal) = &outcome.signal {
@@ -64,15 +84,12 @@ fn report(outcome: &Outcome, descriptor: Option<i32>) {
     } else {
         serde_json::json!({ "outcome": "remote_exit", "exit_status": outcome.remote_status })
     };
-    if let Some(fd) = descriptor {
-        let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
-        if duplicated >= 0 {
-            let mut file = unsafe { std::fs::File::from_raw_fd(duplicated) };
-            let _ = writeln!(file, "{value}");
-        }
+    if let Some(file) = descriptor {
+        writeln!(file, "{value}")?;
     } else if outcome.error.is_some() || outcome.signal.is_some() {
-        let _ = writeln!(std::io::stderr(), "{value}");
+        writeln!(std::io::stderr(), "{value}")?;
     }
+    Ok(())
 }
 
 pub async fn run() -> u8 {
@@ -88,19 +105,28 @@ pub async fn run() -> u8 {
             return 0;
         }
         Err(_) => {
-            report(&Outcome::failure(ErrorCode::InputError), None);
+            let _ = report(&Outcome::failure(ErrorCode::InputError), None);
+            return 125;
+        }
+    };
+    let mut descriptor = match outcome_file(args.outcome_fd) {
+        Ok(descriptor) => descriptor,
+        Err(_) => {
+            let _ = report(&Outcome::failure(ErrorCode::LocalIo), None);
             return 125;
         }
     };
     let outcome = execute(&args).await.unwrap_or_else(Outcome::failure);
-    report(&outcome, args.outcome_fd);
+    if report(&outcome, descriptor.as_mut()).is_err() {
+        let _ = report(&Outcome::failure(ErrorCode::LocalIo), None);
+        return 125;
+    }
     outcome.exit
 }
 
 async fn send(writer: &mut OwnedWriteHalf, request: &ExecRequest) -> Result<(), ErrorCode> {
-    tokio::time::timeout(Duration::from_secs(30), write_frame(writer, request))
+    write_frame(writer, request)
         .await
-        .map_err(|_| ErrorCode::TransportFailure)?
         .map_err(|_| ErrorCode::TransportFailure)
 }
 
@@ -129,16 +155,22 @@ async fn execute(args: &Args) -> Result<Outcome, ErrorCode> {
         .map_err(|_| ErrorCode::TransportFailure)?
         .map_err(|_| ErrorCode::TransportFailure)?;
     let (mut reader, mut writer) = stream.into_split();
-    send(&mut writer, &request).await?;
+    tokio::time::timeout(Duration::from_secs(30), send(&mut writer, &request))
+        .await
+        .map_err(|_| ErrorCode::TransportFailure)??;
     let mut interrupts = signal(SignalKind::interrupt()).map_err(|_| ErrorCode::LocalIo)?;
     let mut terminate = signal(SignalKind::terminate()).map_err(|_| ErrorCode::LocalIo)?;
     let mut hangup = signal(SignalKind::hangup()).map_err(|_| ErrorCode::LocalIo)?;
     let mut quit = signal(SignalKind::quit()).map_err(|_| ErrorCode::LocalIo)?;
     let mut resize = signal(SignalKind::window_change()).map_err(|_| ErrorCode::LocalIo)?;
     let session = async {
-        match read_frame::<_, ExecResponse>(&mut reader)
-            .await
-            .map_err(|_| ErrorCode::ProtocolError)?
+        match tokio::time::timeout(
+            Duration::from_secs(30),
+            read_frame::<_, ExecResponse>(&mut reader),
+        )
+        .await
+        .map_err(|_| ErrorCode::TransportFailure)?
+        .map_err(|_| ErrorCode::ProtocolError)?
         {
             ExecResponse::SessionReady => {}
             ExecResponse::ApprovalRequired { .. } => return Err(ErrorCode::ApprovalRequired),

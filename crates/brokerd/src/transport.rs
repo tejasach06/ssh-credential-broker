@@ -1,17 +1,19 @@
 use crate::daemon::classify;
 use broker_core::{ApprovedTarget, CoreError, GrantToken, StateEngine};
 use broker_proto::{
-    read_frame, write_frame, ErrorCode, ExecRequest, ExecResponse, PendingDestination,
-    MAX_STREAM_DATA,
+    read_frame, ErrorCode, ExecRequest, ExecResponse, PendingDestination, MAX_STREAM_DATA,
 };
 use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh::{client, Channel, ChannelMsg};
 use std::future::{poll_fn, Future};
 use std::net::{IpAddr, Shutdown, SocketAddr};
+use std::os::fd::AsFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use std::time::Duration;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{unix::AsyncFd, Interest};
+use tokio::net::unix::OwnedReadHalf;
 use tokio::sync::{mpsc, watch};
 
 pub struct Failure(pub ErrorCode);
@@ -199,23 +201,59 @@ pub async fn execute(
     token: &GrantToken,
     request: ExecRequest,
     reader: OwnedReadHalf,
-    writer: &mut OwnedWriteHalf,
+    responses: &mpsc::Sender<ExecResponse>,
 ) -> Result<(), Failure> {
     let (tx, mut input) = mpsc::channel(8);
-    let (disconnected, mut disconnect_rx) = watch::channel(false);
+    let ready = Arc::new(AtomicBool::new(false));
+    let input_ready = ready.clone();
+    let (disconnected, mut disconnect_rx) = watch::channel(None);
+    let monitor_disconnected = disconnected.clone();
+    let fd = reader
+        .as_ref()
+        .as_fd()
+        .try_clone_to_owned()
+        .map_err(network)?;
+    // SAFETY: AsyncFd owns this duplicated OwnedFd. Its descriptor remains open
+    // and unchanged until AsyncFd deregisters and drops it, independently of reader.
+    let monitor =
+        unsafe { AsyncFd::register_with_interest(fd, Interest::READABLE) }.map_err(network)?;
+    let _disconnect_task = InputTask(tokio::spawn(async move {
+        loop {
+            match monitor.readable().await {
+                Ok(mut readiness) => {
+                    let event = readiness.ready();
+                    if event.is_read_closed() || event.is_error() {
+                        let _ = monitor_disconnected.send(Some(ErrorCode::Cancelled));
+                        break;
+                    }
+                    // Ordinary data belongs to the input task. Clear this edge
+                    // without reading or spinning while its bounded queue is full.
+                    readiness.clear_ready();
+                }
+                Err(_) => {
+                    let _ = monitor_disconnected.send(Some(ErrorCode::Cancelled));
+                    break;
+                }
+            }
+        }
+    }));
     let _input_task = InputTask(tokio::spawn(async move {
         let mut reader = reader;
         loop {
             match read_frame::<_, ExecRequest>(&mut reader).await {
                 Ok(ExecRequest::Cancel) | Err(_) => {
-                    let _ = disconnected.send(true);
+                    let _ = disconnected.send(Some(ErrorCode::Cancelled));
                     break;
                 }
                 Ok(ExecRequest::Connect { .. }) => {
-                    let _ = disconnected.send(true);
+                    let _ = disconnected.send(Some(ErrorCode::ProtocolError));
                     break;
                 }
                 Ok(message) => {
+                    if !input_ready.load(Ordering::Acquire) {
+                        let _ = disconnected.send(Some(ErrorCode::ProtocolError));
+                        break;
+                    }
                     if tx.send(message).await.is_err() {
                         break;
                     }
@@ -225,8 +263,10 @@ pub async fn execute(
     }));
     tokio::select! {
         biased;
-        _ = disconnect_rx.changed() => Err(Failure(ErrorCode::Cancelled)),
-        result = execute_connected(state, token, request, &mut input, writer) => result,
+        _ = disconnect_rx.changed() => Err(Failure(
+            (*disconnect_rx.borrow()).unwrap_or(ErrorCode::Cancelled),
+        )),
+        result = execute_connected(state, token, request, &mut input, responses, &ready) => result,
     }
 }
 
@@ -235,7 +275,8 @@ async fn execute_connected(
     token: &GrantToken,
     request: ExecRequest,
     input: &mut mpsc::Receiver<ExecRequest>,
-    writer: &mut OwnedWriteHalf,
+    responses: &mpsc::Sender<ExecResponse>,
+    ready: &AtomicBool,
 ) -> Result<(), Failure> {
     let ExecRequest::Connect {
         target,
@@ -280,16 +321,14 @@ async fn execute_connected(
                     host_key_type: key.algorithm,
                 },
             )?;
-            write_frame(
-                writer,
-                &ExecResponse::ApprovalRequired {
+            responses
+                .send(ExecResponse::ApprovalRequired {
                     target: target.into(),
                     port,
                     host_key_fingerprint: key.fingerprint,
-                },
-            )
-            .await
-            .map_err(network)?;
+                })
+                .await
+                .map_err(network)?;
             return Ok(());
         }
         Err(error) => return Err(error.into()),
@@ -359,10 +398,12 @@ async fn execute_connected(
                 }
             }
             channel_reply(&mut channel).await?;
-            write_frame(writer, &ExecResponse::SessionReady)
+            responses
+                .send(ExecResponse::SessionReady)
                 .await
                 .map_err(network)?;
-            pump(channel, input, writer, pty.is_some()).await?;
+            ready.store(true, Ordering::Release);
+            pump(channel, input, responses, pty.is_some()).await?;
             let _ = bounded(
                 connection
                     .handle
@@ -376,11 +417,14 @@ async fn execute_connected(
             partial_success,
         } = result
         {
-            if partial_success || !remaining_methods.contains(&russh::MethodKind::Password) {
+            if partial_success {
+                return Err(Failure(ErrorCode::Unsupported));
+            }
+            attempt.record_auth_rejection()?;
+            if !remaining_methods.contains(&russh::MethodKind::Password) {
                 return Err(Failure(ErrorCode::Unsupported));
             }
         }
-        attempt.record_auth_rejection()?;
         // A fresh transport is required for the next credential.
         drop(connection);
     }
@@ -399,7 +443,7 @@ async fn channel_reply(channel: &mut Channel<client::Msg>) -> Result<(), Failure
 async fn pump(
     channel: Channel<client::Msg>,
     input: &mut mpsc::Receiver<ExecRequest>,
-    writer: &mut OwnedWriteHalf,
+    responses: &mpsc::Sender<ExecResponse>,
     terminal: bool,
 ) -> Result<(), Failure> {
     let (mut output, input_channel) = channel.split();
@@ -430,14 +474,16 @@ async fn pump(
             match message {
                 ChannelMsg::Data { data } => {
                     for bytes in data.chunks(MAX_STREAM_DATA) {
-                        write_frame(writer, &ExecResponse::StdoutData(bytes.to_vec()))
+                        responses
+                            .send(ExecResponse::StdoutData(bytes.to_vec()))
                             .await
                             .map_err(network)?;
                     }
                 }
                 ChannelMsg::ExtendedData { data, ext: 1 } => {
                     for bytes in data.chunks(MAX_STREAM_DATA) {
-                        write_frame(writer, &ExecResponse::StderrData(bytes.to_vec()))
+                        responses
+                            .send(ExecResponse::StderrData(bytes.to_vec()))
                             .await
                             .map_err(network)?;
                     }
@@ -446,7 +492,7 @@ async fn pump(
                     exit_status: status,
                 } => exit_status = Some(status),
                 ChannelMsg::ExitSignal { signal_name, .. } => {
-                    signal = Some(format!("{signal_name:?}"))
+                    signal = Some(signal_name_string(signal_name))
                 }
                 _ => {}
             }
@@ -454,19 +500,47 @@ async fn pump(
         if exit_status.is_none() && signal.is_none() {
             return Err(Failure(ErrorCode::MissingRemoteStatus));
         }
-        write_frame(
-            writer,
-            &ExecResponse::ProcessExit {
+        responses
+            .send(ExecResponse::ProcessExit {
                 exit_status,
                 signal,
-            },
-        )
-        .await
-        .map_err(network)?;
+            })
+            .await
+            .map_err(network)?;
         Ok(())
     };
     tokio::select! {
         result = send_input => result,
         result = receive_output => result,
     }
+}
+
+fn signal_name_string(signal: russh::Sig) -> String {
+    let name = match signal {
+        russh::Sig::ABRT => "ABRT",
+        russh::Sig::ALRM => "ALRM",
+        russh::Sig::FPE => "FPE",
+        russh::Sig::HUP => "HUP",
+        russh::Sig::ILL => "ILL",
+        russh::Sig::INT => "INT",
+        russh::Sig::KILL => "KILL",
+        russh::Sig::PIPE => "PIPE",
+        russh::Sig::QUIT => "QUIT",
+        russh::Sig::SEGV => "SEGV",
+        russh::Sig::TERM => "TERM",
+        russh::Sig::USR1 => "USR1",
+        russh::Sig::Custom(value) => {
+            return if !value.is_empty()
+                && value.len() <= 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'-')
+            {
+                value
+            } else {
+                "UNKNOWN".into()
+            };
+        }
+    };
+    name.into()
 }

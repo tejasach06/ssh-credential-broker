@@ -15,7 +15,7 @@ authors = ["Tejas Acharya"]
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-tokio = { version = "1.43", features = ["full"] }
+tokio = { version = "1.54", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 bytes = "1.9"
 serde = { version = "1.0", features = ["derive"] }

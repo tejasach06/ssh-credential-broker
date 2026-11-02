@@ -47,7 +47,8 @@ impl Prompt {
             .write(true)
             .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open("/dev/tty")?;
-        Ok(Self(AsyncFd::new(file)?))
+        // SAFETY: File owns a fixed descriptor for the entire registration.
+        Ok(Self(unsafe { AsyncFd::register(file) }?))
     }
 
     pub fn label(&self, ordinal: u32) -> io::Result<()> {
@@ -142,14 +143,15 @@ pub fn private_input() -> io::Result<PrivateInput> {
     if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    match AsyncFd::new(file) {
+    // SAFETY: File owns a fixed descriptor for the entire registration.
+    match unsafe { AsyncFd::register(file) } {
         Ok(file) => Ok(PrivateInput {
             input: InputKind::Ready(file),
             flags,
         }),
         Err(error) => {
             unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_SETFL, flags) };
-            Err(error)
+            Err(error.into())
         }
     }
 }

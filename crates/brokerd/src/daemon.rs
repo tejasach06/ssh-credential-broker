@@ -208,18 +208,45 @@ async fn serve_execution(
         }
     };
     let (reader, mut writer) = stream.into_split();
+    let (responses, mut outgoing) = tokio::sync::mpsc::channel::<broker_proto::ExecResponse>(8);
+    // This task alone owns framing. Revocation cancels SSH work, never a partial
+    // frame followed by another frame on the same byte stream.
+    let mut output = tokio::spawn(async move {
+        while let Some(response) = outgoing.recv().await {
+            write_frame(&mut writer, &response).await?;
+        }
+        Ok::<(), broker_proto::ProtoError>(())
+    });
     let result = tokio::select! {
         biased;
         _ = token.cancelled() => {
             let code = token.cancellation_reason().and_then(|reason| ErrorCode::from_code(reason.code())).unwrap_or(ErrorCode::BrokerLock);
             Err(transport::Failure(code))
         },
-        outcome = transport::execute(&state, &token, request, reader, &mut writer) => outcome,
+        _ = &mut output => return,
+        outcome = transport::execute(&state, &token, request, reader, &responses) => outcome,
     };
+    let failed = result.is_err();
     if let Err(error) = result {
-        let response = error.0.exec_response();
-        let _ =
-            tokio::time::timeout(Duration::from_secs(5), write_frame(&mut writer, &response)).await;
+        let _ = tokio::time::timeout(
+            Duration::from_secs(5),
+            responses.send(error.0.exec_response()),
+        )
+        .await;
+    }
+    drop(responses);
+    if !failed {
+        tokio::select! {
+            _ = &mut output => return,
+            _ = token.cancelled() => {}
+        }
+    }
+    if tokio::time::timeout(Duration::from_secs(5), &mut output)
+        .await
+        .is_err()
+    {
+        output.abort();
+        let _ = output.await;
     }
 }
 

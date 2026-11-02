@@ -12,12 +12,12 @@ Use an administrator-controlled terminal, not the harness session. The harness m
 
 The installer rejects known privileged group memberships, including `root`, `sudo`, `wheel`, `admin`, `docker`, `lxd`, `incus`, `libvirt`, and the broker service and administration groups. This does not verify arbitrary sudoers rules or every privilege path. Audit the harness's effective sudo access, VM and container engine control, debugger rights, and service-management permissions before installation.
 
-1. Obtain the three native release binaries, the matching `scripts/` directory, and `deploy/` directory from a trusted release. Verify the release provenance and published archive checksums independently. Do not run a downloaded installer before reviewing it.
-2. Place `ssh-brokerd`, `broker-ssh`, and `brokerctl` together in a release directory. Do not run the installed daemon from a harness-writable checkout.
-3. Supply the existing operator and harness account names. Replace `trusted-operator`, `automation`, and the release path below.
+1. Obtain the native release archive from a trusted release. Verify its provenance and published archive checksum independently. Do not run a downloaded installer before reviewing it.
+2. Extract the archive. It contains `bin/ssh-brokerd`, `bin/broker-ssh`, `bin/brokerctl`, the matching `scripts/` and `deploy/` directories, and the release documentation. Keep those relative paths intact. Do not run the installed daemon from a harness-writable checkout.
+3. From the extracted release root, supply the existing operator and harness account names. Replace `trusted-operator`, `automation`, and the extracted release path below.
 
 ```sh
-sudo bash scripts/install.sh --bin-dir /absolute/path/to/release \
+sudo bash scripts/install.sh --bin-dir /absolute/path/to/extracted-release/bin \
 	--operator trusted-operator --harness automation
 ```
 
@@ -116,7 +116,7 @@ Command mode preserves binary stdin, stdout, and stderr. EOF closes the SSH inpu
 
 Use `--socket PATH` on `broker-ssh` or `--admin-socket PATH` on `brokerctl` to override the default socket. Client options are not OpenSSH options. SSH URLs, `user@host`, proxy commands, SSH configuration aliases, forwarding, agent forwarding, SCP, SFTP, and arbitrary SSH subsystems are unsupported.
 
-A remote exit status becomes the shell exit code modulo 256. Local failures use exit code `125`. A remote process may also exit `125`, so automation must not classify outcomes from the exit code alone. `--outcome-fd FD` writes one JSON outcome to an already-open descriptor numbered at least 3, separate from remote output:
+A remote exit status becomes the shell exit code modulo 256. Recognized remote signals return `128` plus the native platform's signal number. Local failures use exit code `125`. A remote process may also exit `125`, so automation must not classify outcomes from the exit code alone. `--outcome-fd FD` writes one JSON outcome to an already-open descriptor numbered at least 3, separate from remote output:
 
 ```sh
 broker-ssh --outcome-fd 3 server.example -- 'exit 7' 3>outcome.json
@@ -133,6 +133,8 @@ brokerctl lock
 ```
 
 Lock and expiry invalidate authorization, disconnect active SSH channels, and clear the pool and all session state. A password already handed to the transport may already be in flight. Detached remote processes and changes made on the server may survive disconnect.
+
+The daemon allows up to five seconds for queued execution output and a classified revocation diagnostic to drain. A slow or unresponsive consumer can exhaust that bound and receive a socket close without the diagnostic. This drain period does not extend authorization or keep the SSH session active.
 
 Remove the service and installed binaries:
 
@@ -181,5 +183,9 @@ Service metadata may include destination names, IPs, fingerprints, and timing. T
 The native workflow runs formatting, clippy, unit and integration tests, release builds, and `sudo python3 scripts/smoke.py --bin-dir target/release` on Linux and macOS runners. The smoke uses a disposable loopback SSH server, generated fixture credentials, a root operator, and a distinct unprivileged harness. It refuses an existing tracked installation. Run it only on a disposable native host, not a workstation with a production broker.
 
 The script reports the identities and behavior it actually observes. It is partial acceptance coverage, not a complete A01-A31 security audit. Configured tests do not establish a platform pass until the corresponding run completes. No Linux or macOS execution was performed while authoring these deployment files. Cross-compilation, mocked tests, and Linux containers do not establish macOS isolation. Release evidence must identify each native platform, service and harness identities, exercised scenarios, and observed results. Suspend behavior, race boundaries, resource exhaustion, and all remaining issue acceptance scenarios need their own evidence before a complete release claim.
+
+The smoke also exercises invalid and read-only outcome descriptors before authentication, outcome-write failure, custom remote signals, and 35 seconds of established stdin backpressure while large output drains. It does not yet have a deterministic SSH-phase fixture for sending `Connect` followed by at least nine `StdinData` frames before `SessionReady` and proving that no credential submission or command execution occurs. That pre-session streaming rejection scenario remains an acceptance-evidence gap.
+
+The raw-socket revocation regression runs a real SSH command producing 8 MiB, pauses execution-socket reads to create output backpressure, locks from the operator channel, then resumes draining immediately. It parses each length-prefixed JSON frame through `BROKER_LOCK` within four seconds and rejects corrupted or truncated frames. It does not assert diagnostic delivery to consumers that exceed the five-second drain bound.
 
 The application attempts to limit and clear secret memory. It cannot guarantee absolute erasure of every copy held by allocators, SSH libraries, the kernel, swap, or crash infrastructure. Review [the security contract](SECURITY.md) for the trust assumptions and exclusions.

@@ -223,6 +223,109 @@ async fn aliases_and_reapproval_share_budget_cache_and_cursor() {
 }
 
 #[tokio::test]
+async fn mapped_ipv6_alias_shares_budget_gate_cache_and_cursor_with_ipv4() {
+    for succeeds in [false, true] {
+        let (engine, _, token) = unlocked();
+        let first = approve(&engine, &token, "ipv4-server", 1);
+        engine
+            .register_pending(
+                &token,
+                pending("mapped-alias", "::ffff:192.0.2.1", "SHA256:test"),
+            )
+            .unwrap();
+        assert_eq!(engine.list_pending().unwrap()[0].resolved_ip, "192.0.2.1");
+        engine
+            .approve_target(
+                "mapped-alias".into(),
+                22,
+                "::ffff:c000:201".into(),
+                "SHA256:test".into(),
+                100,
+            )
+            .unwrap();
+        let mapped = engine
+            .resolve_pinned_target(&token, "mapped-alias", 22)
+            .unwrap();
+        assert_eq!(mapped.pinned_ip, "192.0.2.1");
+        assert_eq!(mapped.attempt_budget, 1);
+        let guard = engine.acquire_identity(&token, &first).await.unwrap();
+        let mut waiting = Box::pin(engine.acquire_identity(&token, &mapped));
+        assert!(is_pending(waiting.as_mut()).await);
+        drop(waiting);
+        let mut attempt = engine.reserve_attempt(&guard).unwrap();
+        assert_eq!(submit(&mut attempt), "first");
+        if succeeds {
+            attempt.record_auth_success().unwrap();
+        } else {
+            attempt.record_auth_rejection().unwrap();
+        }
+        drop(attempt);
+        drop(guard);
+        // Reapproving the alternate spelling must not reset the canonical state.
+        engine
+            .register_pending(
+                &token,
+                pending("mapped-alias", "::ffff:c000:201", "SHA256:test"),
+            )
+            .unwrap();
+        engine
+            .approve_target(
+                "mapped-alias".into(),
+                22,
+                "192.0.2.1".into(),
+                "SHA256:test".into(),
+                100,
+            )
+            .unwrap();
+        let mapped = engine
+            .resolve_pinned_target(&token, "mapped-alias", 22)
+            .unwrap();
+        assert_eq!(mapped.attempt_budget, 1);
+        assert_eq!(mapped.attempts_consumed, 1);
+        assert_eq!(mapped.discovery_cursor, usize::from(!succeeds));
+        assert_eq!(mapped.cached_match, succeeds);
+        let guard = engine.acquire_identity(&token, &mapped).await.unwrap();
+        assert!(matches!(
+            engine.reserve_attempt(&guard),
+            Err(CoreError::BudgetExhausted { .. })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn mapped_ipv6_and_ipv4_numeric_targets_refer_to_same_pending_alias() {
+    let (engine, _, token) = unlocked();
+    engine
+        .register_pending(
+            &token,
+            pending("::ffff:192.0.2.1", "::ffff:192.0.2.1", "SHA256:test"),
+        )
+        .unwrap();
+    engine
+        .register_pending(&token, pending("192.0.2.1", "192.0.2.1", "SHA256:test"))
+        .unwrap();
+    assert_eq!(engine.list_pending().unwrap().len(), 1);
+    engine
+        .approve_target(
+            "::ffff:c000:201".into(),
+            22,
+            "192.0.2.1".into(),
+            "SHA256:test".into(),
+            1,
+        )
+        .unwrap();
+    for target in ["192.0.2.1", "::ffff:192.0.2.1", "::ffff:c000:201"] {
+        assert_eq!(
+            engine
+                .resolve_pinned_target(&token, target, 22)
+                .unwrap()
+                .pinned_ip,
+            "192.0.2.1"
+        );
+    }
+}
+
+#[tokio::test]
 async fn reservation_refunds_before_commit_but_uncertain_submission_stays_consumed() {
     let (engine, _, token) = unlocked();
     let target = approve(&engine, &token, "server", 1);
