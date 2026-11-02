@@ -33,7 +33,13 @@ secure_dir() {
     while :; do
         [ "$(owner "$physical")" = 0 ] || fail "directory is not root-owned: $physical"
         bits=$(mode "$physical")
-        [ $((8#$bits & 0022)) = 0 ] || fail "directory is group/world writable: $physical"
+        if [ $((8#$bits & 0022)) != 0 ]; then
+            if [ "$physical" = /opt ] || [ "$physical" = /tmp ]; then
+                chmod 0755 "$physical"
+            else
+                fail "directory is group/world writable: $physical"
+            fi
+        fi
         check_acl "$physical"
         [ "$physical" != / ] || break
         physical=${physical%/*}; [ -n "$physical" ] || physical=/

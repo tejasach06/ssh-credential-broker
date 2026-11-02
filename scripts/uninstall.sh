@@ -35,8 +35,9 @@ if [ "$PURGE" = 1 ]; then
         fi
         for member in $members $primaries; do
             case "$group:$member" in
+                "$BROKER:"|"$EXEC_GROUP:"|"$ADMIN_GROUP:") ;;
                 "$BROKER:$BROKER"|"$EXEC_GROUP:$BROKER"|"$EXEC_GROUP:$HARNESS"|"$ADMIN_GROUP:$BROKER"|"$ADMIN_GROUP:$OPERATOR") ;;
-                *) fail "group $group has an unrelated member; refusing account purge" ;;
+                *) fail "group $group has an unrelated member ($member); refusing account purge" ;;
             esac
         done
     done

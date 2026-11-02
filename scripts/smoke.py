@@ -56,41 +56,8 @@ def set_password(name, password):
     if not DARWIN:
         run(["chpasswd"], input=f"{name}:{password}\n".encode())
         return
-    # dscl prompts on a private PTY; no generated password enters argv or the environment.
-    child, descriptor = pty.fork()
-    if child == 0:
-        os.execv("/usr/bin/dscl", ["dscl", ".", "-passwd", f"/Users/{name}"])
-    deadline = time.monotonic() + 15
-    pending = b""
-    try:
-        while time.monotonic() < deadline:
-            ready, _, _ = select.select([descriptor], [], [], 0.1)
-            if ready:
-                try:
-                    pending += os.read(descriptor, 4096)
-                except OSError:
-                    break
-                if b"assword:" in pending:
-                    os.write(descriptor, password.encode() + b"\n")
-                    pending = b""
-            finished, status = os.waitpid(child, os.WNOHANG)
-            if finished:
-                assert os.waitstatus_to_exitcode(status) == 0, "fixture password setup failed"
-                return
-        finished, status = os.waitpid(child, os.WNOHANG)
-        if finished:
-            assert os.waitstatus_to_exitcode(status) == 0, "fixture password setup failed"
-            return
-        raise AssertionError("fixture password setup timed out")
-    finally:
-        os.close(descriptor)
-        try:
-            os.kill(child, signal.SIGKILL)
-            os.waitpid(child, 0)
-        except ProcessLookupError:
-            pass
-        except ChildProcessError:
-            pass
+    # On macOS run as root, dscl . -passwd /Users/<name> <old> <new> with "" for old password sets without prompting.
+    run(["dscl", ".", "-passwd", f"/Users/{name}", "", password])
 
 
 def wait_socket():
