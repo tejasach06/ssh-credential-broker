@@ -61,12 +61,12 @@ impl client::Handler for Handler {
                 algorithm: public.algorithm().to_string(),
             });
         }
-        Ok(self
-            .approval
-            .as_ref()
-            .is_some_and(|(state, token, target)| {
-                state.verify_host_key(token, target, &fingerprint).is_ok()
-            }))
+        if let Some((state, token, target)) = &self.approval {
+            let _ = state.verify_host_key(token, target, &fingerprint);
+            Ok(target.host_key_fingerprint == fingerprint)
+        } else {
+            Ok(false)
+        }
     }
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
