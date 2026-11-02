@@ -56,8 +56,8 @@ def set_password(name, password):
     if not DARWIN:
         run(["chpasswd"], input=f"{name}:{password}\n".encode())
         return
-    # On macOS run as root, dscl . -passwd /Users/<name> <old> <new> with "" for old password sets without prompting.
-    run(["dscl", ".", "-passwd", f"/Users/{name}", "", password])
+    # On macOS run as root, dscl . -passwd /Users/<name> <new> sets password directly without prompt or old password.
+    run(["dscl", ".", "-passwd", f"/Users/{name}", password])
 
 
 def wait_socket():
@@ -271,6 +271,8 @@ def main():
                 expect_error(execute(), "RENEWAL_REQUIRED")
                 ctl("resume", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 assert execute("true").returncode == 0, "explicit renewal did not use the next credential"
+                # Budget was already consumed by line 273's execute("true"); do not add budget before racing so budget is 0,
+                # or add exactly 1 attempt so exactly one racer succeeds and the other fails with BUDGET_EXHAUSTED.
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 def spawn(command):
                     return subprocess.Popen([str(INSTALLED / "broker-ssh"), "--socket", str(RUNTIME / "exec.sock"), "127.0.0.1", "--port", str(port), "--", command], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=drop)
@@ -279,7 +281,8 @@ def main():
                 for racer in racers:
                     out, err = racer.communicate(timeout=20)
                     raced.append((racer.returncode, out, err))
-                assert sorted(item[0] for item in raced) == [0, 125], "concurrent cached logins exceeded one remaining attempt"
+                print(f"DEBUG: raced results: {[(r[0], r[1], r[2]) for r in raced]}", file=sys.stderr)
+                assert sorted(item[0] for item in raced) == [0, 125], f"concurrent cached logins exceeded one remaining attempt: {raced}"
                 assert json.loads(next(item[2] for item in raced if item[0] == 125))["code"] == "BUDGET_EXHAUSTED"
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "2")
                 # This is the real execution socket and a real SSH command. A separate harness
