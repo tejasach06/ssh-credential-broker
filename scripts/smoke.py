@@ -51,8 +51,9 @@ def create_user(name, login):
         run(["dscl", ".", "-create", f"/Users/{name}", key, value])
     if login:
         Path(f"/Users/{name}").mkdir(mode=0o755, exist_ok=True)
-        run(["chown", f"{name}:staff", f"/Users/{name}"])
+        run(["chown", f"{name}:20", f"/Users/{name}"])
         run(["dseditgroup", "-o", "edit", "-a", name, "-t", "user", "staff"])
+        run(["dseditgroup", "-o", "edit", "-a", name, "-t", "user", "com.apple.access_ssh"])
 def set_password(name, password):
     if not DARWIN:
         run(["chpasswd"], input=f"{name}:{password}\n".encode())
@@ -408,6 +409,7 @@ def main():
                 if err_code == "HOST_KEY_MISMATCH":
                     expect_error(execute(), "APPROVAL_REQUIRED")
                 pending = json.loads(ctl("pending").stdout)["PendingList"]
+                print(f"DEBUG: pending list: {pending}", file=sys.stderr)
                 matching = next(p for p in pending if p["target"] == "127.0.0.1" and p["port"] == port)
                 ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", matching["resolved_ip"], "--fingerprint", matching["host_key_fingerprint"])
                 expiring = spawn("printf EXPIRY_SESSION; sleep 120")
