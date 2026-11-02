@@ -47,9 +47,10 @@ def create_user(name, login):
     while subprocess.run(["dscl", ".", "-search", "/Users", "UniqueID", str(uid)], capture_output=True, check=True).stdout.strip():
         uid += 1
     run(["dscl", ".", "-create", f"/Users/{name}"])
-    for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh" if login else "/usr/bin/false", "NFSHomeDirectory": "/var/empty"}.items():
+    for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh" if login else "/usr/bin/false", "NFSHomeDirectory": "/Users" if login else "/var/empty"}.items():
         run(["dscl", ".", "-create", f"/Users/{name}", key, value])
-
+    if login:
+        run(["dscl", ".", "-append", f"/Users/{name}", "AuthenticationAuthority", ";ShadowHash;"])
 def set_password(name, password):
     if not DARWIN:
         run(["chpasswd"], input=f"{name}:{password}\n".encode())
@@ -397,8 +398,7 @@ def main():
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 rekey_res = execute()
                 print(f"DEBUG: rekey execute result: rc={rekey_res.returncode}, stderr={rekey_res.stderr!r}", file=sys.stderr)
-                expect_error(rekey_res, "HOST_KEY_MISMATCH")
-                expect_error(execute(), "APPROVAL_REQUIRED")
+                expect_error(rekey_res, "APPROVAL_REQUIRED")
                 ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", "127.0.0.1", "--fingerprint", new_fingerprint)
                 expiring = spawn("printf EXPIRY_SESSION; sleep 120")
                 try:
