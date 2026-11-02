@@ -403,7 +403,9 @@ def main():
                 # Second request sees the invalidated alias, probes the server to record pending,
                 # and returns APPROVAL_REQUIRED.
                 expect_error(execute(), "APPROVAL_REQUIRED")
-                ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", "127.0.0.1", "--fingerprint", new_fingerprint)
+                pending = json.loads(ctl("pending").stdout)["PendingList"]
+                matching = next(p for p in pending if p["target"] == "127.0.0.1" and p["port"] == port)
+                ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", matching["resolved_ip"], "--fingerprint", matching["host_key_fingerprint"])
                 expiring = spawn("printf EXPIRY_SESSION; sleep 120")
                 try:
                     assert select.select([expiring.stdout], [], [], 10)[0], "expiry command did not open"
