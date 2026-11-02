@@ -472,7 +472,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except subprocess.CalledProcessError:
-        raise SystemExit("native smoke subprocess failed; output suppressed to avoid fixture credential disclosure")
+    main()
