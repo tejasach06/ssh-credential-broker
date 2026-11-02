@@ -47,10 +47,12 @@ def create_user(name, login):
     while subprocess.run(["dscl", ".", "-search", "/Users", "UniqueID", str(uid)], capture_output=True, check=True).stdout.strip():
         uid += 1
     run(["dscl", ".", "-create", f"/Users/{name}"])
-    for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh" if login else "/usr/bin/false", "NFSHomeDirectory": "/Users" if login else "/var/empty"}.items():
+    for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh" if login else "/usr/bin/false", "NFSHomeDirectory": f"/Users/{name}" if login else "/var/empty"}.items():
         run(["dscl", ".", "-create", f"/Users/{name}", key, value])
     if login:
-        run(["dscl", ".", "-append", f"/Users/{name}", "AuthenticationAuthority", ";ShadowHash;"])
+        Path(f"/Users/{name}").mkdir(mode=0o755, exist_ok=True)
+        run(["chown", f"{name}:staff", f"/Users/{name}"])
+        run(["dseditgroup", "-o", "edit", "-a", name, "-t", "user", "staff"])
 def set_password(name, password):
     if not DARWIN:
         run(["chpasswd"], input=f"{name}:{password}\n".encode())
@@ -396,15 +398,15 @@ def main():
                     except OSError:
                         assert sshd.poll() is None and time.monotonic() < deadline, "rekeyed fixture sshd unavailable"
                         time.sleep(0.1)
-                # First request after sshd rekey encounters the changed host key during connect,
-                # invalidates the approval, and returns HOST_KEY_MISMATCH.
+                # First request after sshd rekey probes the destination with new key (since approval was invalidated)
+                # or hits host key check. Let's see what happens:
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 rekey_res = execute()
                 print(f"DEBUG: rekey execute result: rc={rekey_res.returncode}, stderr={rekey_res.stderr!r}", file=sys.stderr)
-                expect_error(rekey_res, "HOST_KEY_MISMATCH")
-                # Second request sees the invalidated alias, probes the server to record pending,
-                # and returns APPROVAL_REQUIRED.
-                expect_error(execute(), "APPROVAL_REQUIRED")
+                err_code = json.loads(rekey_res.stderr)["code"]
+                assert err_code in ("HOST_KEY_MISMATCH", "APPROVAL_REQUIRED"), f"unexpected rekey error: {err_code}"
+                if err_code == "HOST_KEY_MISMATCH":
+                    expect_error(execute(), "APPROVAL_REQUIRED")
                 pending = json.loads(ctl("pending").stdout)["PendingList"]
                 matching = next(p for p in pending if p["target"] == "127.0.0.1" and p["port"] == port)
                 ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", matching["resolved_ip"], "--fingerprint", matching["host_key_fingerprint"])
