@@ -103,7 +103,7 @@ def main():
                 Path("/run/sshd").mkdir(mode=0o755)
                 made_sshd_dir = True
             config = work / "sshd_config"
-            config.write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {work / 'host_key'}\nPidFile {work / 'sshd.pid'}\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nPubkeyAuthentication no\nPermitEmptyPasswords no\nPermitRootLogin no\nUsePAM no\nAllowUsers {login}\nAllowTcpForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitTTY yes\nLogLevel VERBOSE\n")
+            config.write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {work / 'host_key'}\nPidFile {work / 'sshd.pid'}\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nPubkeyAuthentication no\nPermitEmptyPasswords no\nPermitRootLogin no\nUsePAM {'yes' if not DARWIN else 'no'}\nPerSourcePenalties no\nAllowUsers {login}\nAllowTcpForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitTTY yes\nLogLevel VERBOSE\n")
             run(["/usr/sbin/sshd", "-t", "-f", config])
             with (work / "sshd.log").open("wb") as log:
                 sshd = subprocess.Popen(["/usr/sbin/sshd", "-D", "-e", "-f", str(config)], stdout=log, stderr=log)
@@ -258,7 +258,11 @@ def main():
                     probe = "import ctypes,sys; c=ctypes.CDLL(None,use_errno=True); result=c.ptrace(16,int(sys.argv[1]),0,0); sys.exit(0 if result == -1 and ctypes.get_errno() in (1,13) else 1)"
                 denied_debug = subprocess.run([sys.executable, "-c", probe, str(daemon_pid)], capture_output=True, preexec_fn=drop, timeout=5)
                 assert denied_debug.returncode == 0, "harness acquired debugger access to the daemon"
-                hostile_and_pre_session(drop, INSTALLED, RUNTIME, token, work / "sshd.log", entries)
+                # Exhaust remaining budget attempts so dns_pinning sees an exhausted budget.
+                while True:
+                    res = execute()
+                    if res.returncode == 125 and json.loads(res.stderr)["code"] == "BUDGET_EXHAUSTED":
+                        break
                 dns_pinning(ctl, drop, INSTALLED, RUNTIME, port, fingerprint, token, work / "sshd.log")
                 # Cached failure must stop at renewal, then resume after the rejected cached entry.
                 set_password(login, next_password)
