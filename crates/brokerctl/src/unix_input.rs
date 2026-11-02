@@ -124,11 +124,14 @@ pub fn private_input() -> io::Result<PrivateInput> {
     }
     let stat = unsafe { stat.assume_init() };
     let kind = stat.st_mode & libc::S_IFMT;
-    if stat.st_uid != unsafe { libc::geteuid() }
-        || stat.st_mode & 0o077 != 0
-        || (kind != libc::S_IFREG && kind != libc::S_IFIFO && kind != libc::S_IFSOCK)
-    {
-        return Err(io::ErrorKind::PermissionDenied.into());
+    let anonymous_pipe = kind == libc::S_IFIFO && unsafe { libc::isatty(duplicated) } == 0;
+    if !anonymous_pipe {
+        if stat.st_uid != unsafe { libc::geteuid() }
+            || stat.st_mode & 0o077 != 0
+            || (kind != libc::S_IFREG && kind != libc::S_IFSOCK)
+        {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
     }
     let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
     if flags < 0 {

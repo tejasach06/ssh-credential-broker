@@ -22,6 +22,9 @@ import termios
 import textwrap
 import time
 
+sys.dont_write_bytecode = True
+from smoke_cases import AdmissionFlood, dns_pinning, hostile_and_pre_session
+
 ROOT = Path(__file__).resolve().parent.parent
 DARWIN = platform.system() == "Darwin"
 RUNTIME = Path("/private/var/db/ssh-credential-broker/run" if DARWIN else "/run/ssh-credential-broker")
@@ -283,6 +286,8 @@ def main():
                     probe = "import ctypes,sys; c=ctypes.CDLL(None,use_errno=True); result=c.ptrace(16,int(sys.argv[1]),0,0); sys.exit(0 if result == -1 and ctypes.get_errno() in (1,13) else 1)"
                 denied_debug = subprocess.run([sys.executable, "-c", probe, str(daemon_pid)], capture_output=True, preexec_fn=drop, timeout=5)
                 assert denied_debug.returncode == 0, "harness acquired debugger access to the daemon"
+                hostile_and_pre_session(drop, INSTALLED, RUNTIME, token, work / "sshd.log", entries)
+                dns_pinning(ctl, drop, INSTALLED, RUNTIME, port, fingerprint, token, work / "sshd.log")
                 # Cached failure must stop at renewal, then resume after the rejected cached entry.
                 set_password(login, next_password)
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
@@ -355,12 +360,18 @@ def main():
                 """)
                 raw_client = subprocess.Popen([sys.executable, "-c", raw_probe, str(RUNTIME / "exec.sock"), str(port)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=drop)
                 active = None
+                flood = None
                 try:
                     assert select.select([raw_client.stdout], [], [], 15)[0], "raw execution did not reach output backpressure"
                     assert raw_client.stdout.readline() == b"BACKPRESSURE_READY\n", "raw execution client failed before revocation"
-                    active = spawn("printf ACTIVE_SESSION; sleep 120")
+                    active = spawn("printf ACTIVE_SESSION; sleep 2; printf ADMISSION_ALIVE; sleep 120")
                     assert select.select([active.stdout], [], [], 10)[0], "active command did not open"
                     assert os.read(active.stdout.fileno(), len(b"ACTIVE_SESSION")) == b"ACTIVE_SESSION"
+                    flood = AdmissionFlood(drop, RUNTIME)
+                    assert select.select([active.stdout], [], [], 5)[0], "existing SSH channel stopped producing output during admission pressure"
+                    assert os.read(active.stdout.fileno(), len(b"ADMISSION_ALIVE")) == b"ADMISSION_ALIVE", "admission pressure corrupted the existing channel"
+                    flood.reject_malformed()
+                    ctl("status")
                     ctl("lock")
                     # Resume immediately, within the daemon's five-second bounded drain period.
                     raw_output, raw_error = raw_client.communicate(input=b"D", timeout=6)
@@ -369,10 +380,14 @@ def main():
                     _, ended = active.communicate(timeout=10)
                     assert active.returncode == 125 and json.loads(ended)["code"] == "BROKER_LOCK", "lock did not revoke an active channel"
                 finally:
-                    for client in (raw_client, active):
-                        if client is not None and client.poll() is None:
-                            client.kill()
-                            client.wait(timeout=5)
+                    try:
+                        if flood is not None:
+                            flood.close()
+                    finally:
+                        for client in (raw_client, active):
+                            if client is not None and client.poll() is None:
+                                client.kill()
+                                client.wait(timeout=5)
                 expect_error(execute(), "BROKER_LOCKED")
                 if DARWIN:
                     run(["launchctl", "kickstart", "-k", "system/com.ssh-credential-broker.daemon"])
@@ -417,6 +432,7 @@ def main():
                 report = {"platform": platform.platform(), "operator_uid": 0, "harness_uid": identity.pw_uid, "broker_uid": pwd.getpwnam("sshbroker").pw_uid, "result": "native smoke passed", "coverage": ["startup and restart locked", "private credential input", "pending approval", "verified host key and changed-key refusal", "ordered discovery and budget addition", "cached login budget", "cached rejection and explicit renewal", "concurrent cached single-budget login", "1MiB binary full duplex, EOF, remote status", "interactive shell, resize, and Ctrl-C", "username visibility", "harness admin denial", "native debugger denial", "binary replacement denial", "active-session lock and expiry"], "limits": "Partial acceptance coverage; not all A01-A31 or a complete isolation audit."}
                 report["coverage"].extend(["outcome descriptor preflight before authentication", "outcome write failure", "custom USR2 remote signal", "35-second stdin backpressure with concurrent large output"])
                 report["coverage"].append("framed lock outcome under real Unix-socket output backpressure")
+                report["coverage"].extend(["native resolver change after numeric pinning", "hostname-alias budget sharing", "96 idle IPC admission attempts plus malformed frames with an existing channel", "pre-SessionReady nine-frame streaming rejection during stalled SSH identification", "hostile SSH banner classification without credential submission"])
     finally:
         cleanup_errors = []
         if installed:
