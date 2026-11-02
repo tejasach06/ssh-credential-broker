@@ -48,7 +48,7 @@ def create_user(name, login):
         uid += 1
     run(["dscl", ".", "-create", f"/Users/{name}"])
     # The caller records ownership before creating attributes, so partial users are cleaned.
-    for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh" if login else "/usr/bin/false", "NFSHomeDirectory": "/var/empty", "IsHidden": "1", "Password": "*"}.items():
+    for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh" if login else "/usr/bin/false", "NFSHomeDirectory": "/Users" if login else "/var/empty"}.items():
         run(["dscl", ".", "-create", f"/Users/{name}", key, value])
 
 
@@ -212,11 +212,14 @@ def main():
                 try:
                     os.write(terminal, b"printf 'PTY_READY\\n'\n")
                     deadline = time.monotonic() + 10
-                    while b"PTY_READY\r\n" not in output and time.monotonic() < deadline:
+                    while b"PTY_READY" not in output and time.monotonic() < deadline:
                         readable, _, _ = select.select([terminal], [], [], 0.1)
                         if readable:
-                            output += os.read(terminal, 4096)
-                    assert b"PTY_READY\r\n" in output, "interactive shell did not become ready"
+                            try:
+                                output += os.read(terminal, 4096)
+                            except OSError:
+                                break
+                    assert b"PTY_READY" in output, "interactive shell did not become ready"
                     fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack("HHHH", 37, 91, 0, 0))
                     os.kill(child, signal.SIGWINCH)
                     os.write(terminal, b"sleep 30\n")

@@ -31,7 +31,7 @@ if [ "$PURGE" = 1 ]; then
             primaries=$(getent passwd | awk -F: -v gid="$gid" '$4 == gid { print $1 }')
         else
             members=$(dscl . -read "/Groups/$group" GroupMembership 2>/dev/null | cut -d' ' -f2- || true)
-            primaries=$(dscl . -search /Users PrimaryGroupID "$gid" 2>/dev/null | awk '{print $1}')
+            primaries=$(dscl . -search /Users PrimaryGroupID "$gid" 2>/dev/null | awk '{print $1}' | tr -d '()')
         fi
         for member in $members $primaries; do
             case "$group:$member" in
