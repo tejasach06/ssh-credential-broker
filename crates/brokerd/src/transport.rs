@@ -348,7 +348,10 @@ async fn execute_connected(
             Err(error) => {
                 let key = observed.lock().map_err(network)?.clone();
                 if let Some(key) = key {
-                    state.verify_host_key(token, &approved, &key.fingerprint)?;
+                    if let Err(mismatch) = state.verify_host_key(token, &approved, &key.fingerprint)
+                    {
+                        return Err(mismatch.into());
+                    }
                 }
                 return Err(error);
             }

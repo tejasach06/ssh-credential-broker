@@ -47,7 +47,9 @@ def create_user(name, login):
     while subprocess.run(["dscl", ".", "-search", "/Users", "UniqueID", str(uid)], capture_output=True, check=True).stdout.strip():
         uid += 1
     if login:
-        run(["sysadminctl", "-addUser", name, "-UID", str(uid), "-shell", "/bin/sh", "-home", "/Users", "-password", "placeholder"])
+        run(["dscl", ".", "-create", f"/Users/{name}"])
+        for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh", "NFSHomeDirectory": "/var/empty"}.items():
+            run(["dscl", ".", "-create", f"/Users/{name}", key, value])
     else:
         run(["dscl", ".", "-create", f"/Users/{name}"])
         for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/usr/bin/false", "NFSHomeDirectory": "/var/empty"}.items():
@@ -58,8 +60,7 @@ def set_password(name, password):
         run(["chpasswd"], input=f"{name}:{password}\n".encode())
         return
     run(["dscl", ".", "-passwd", f"/Users/{name}", password])
-    # Ensure OpenDirectory shadow hash is active for SSH PAM authentication
-    run(["dscl", ".", "-authonly", name, password])
+    run(["dscl", ".", "-passwd", f"/Users/{name}", password])
 
 
 def wait_socket():
