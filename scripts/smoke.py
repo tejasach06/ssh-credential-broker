@@ -190,7 +190,7 @@ def main():
                 assert rejected.returncode == 125 and json.loads(rejected.stderr)["code"] in ("AUTHENTICATION_REJECTED", "BUDGET_EXHAUSTED"), "ordered first credential did not fail safely"
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 result = execute("printf COMMAND_OK")
-                assert result.returncode == 0 and result.stdout == b"COMMAND_OK", "next ordered credential failed"
+                assert result.returncode == 0 and result.stdout == b"COMMAND_OK", f"next ordered credential failed: rc={result.returncode}, stdout={result.stdout!r}, stderr={result.stderr!r}"
                 observed_auth = (work / "sshd.log").read_bytes()
                 assert b"Failed password" in observed_auth and b"Accepted password" in observed_auth, "fixture did not observe the ordered rejected and accepted authentications"
                 expect_error(execute(), "BUDGET_EXHAUSTED")

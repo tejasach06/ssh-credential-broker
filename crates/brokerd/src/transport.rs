@@ -373,7 +373,7 @@ async fn execute_connected(
             let _lease = lease;
             if let Some(pty) = &pty {
                 bounded(channel.request_pty(
-                    true,
+                    false,
                     &pty.term,
                     u32::from(pty.cols),
                     u32::from(pty.rows),
@@ -383,21 +383,19 @@ async fn execute_connected(
                 ))
                 .await?
                 .map_err(network)?;
-                channel_reply(&mut channel).await?;
             }
             match &command {
                 Some(command) => {
-                    bounded(channel.exec(true, command.as_bytes()))
+                    bounded(channel.exec(false, command.as_bytes()))
                         .await?
                         .map_err(network)?;
                 }
                 None => {
-                    bounded(channel.request_shell(true))
+                    bounded(channel.request_shell(false))
                         .await?
                         .map_err(network)?;
                 }
             }
-            channel_reply(&mut channel).await?;
             responses
                 .send(ExecResponse::SessionReady)
                 .await
@@ -428,16 +426,6 @@ async fn execute_connected(
         // A fresh transport is required for the next credential.
         drop(connection);
     }
-}
-
-async fn channel_reply(channel: &mut Channel<client::Msg>) -> Result<(), Failure> {
-    bounded(async {
-        match channel.wait().await {
-            Some(ChannelMsg::Success) => Ok(()),
-            _ => Err(Failure(ErrorCode::TransportFailure)),
-        }
-    })
-    .await?
 }
 
 async fn pump(
