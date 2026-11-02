@@ -401,16 +401,17 @@ def main():
                         time.sleep(0.1)
                 # First request after sshd rekey probes the destination with new key (since approval was invalidated)
                 # or hits host key check. Let's see what happens:
-                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 rekey_res = execute()
                 print(f"DEBUG: rekey execute result: rc={rekey_res.returncode}, stderr={rekey_res.stderr!r}", file=sys.stderr)
                 err_code = json.loads(rekey_res.stderr)["code"]
                 assert err_code in ("HOST_KEY_MISMATCH", "APPROVAL_REQUIRED"), f"unexpected rekey error: {err_code}"
-                if err_code == "HOST_KEY_MISMATCH":
-                    expect_error(execute(), "APPROVAL_REQUIRED")
+                # Query pending list to check if new key is pending, otherwise execute once more to probe
                 pending = json.loads(ctl("pending").stdout)["PendingList"]
-                print(f"DEBUG: pending list: {pending}", file=sys.stderr)
-                matching = next(p for p in pending if p["target"] == "127.0.0.1" and p["port"] == port)
+                matching = next((p for p in pending if p["target"] == "127.0.0.1" and p["port"] == port), None)
+                if matching is None:
+                    expect_error(execute(), "APPROVAL_REQUIRED")
+                    pending = json.loads(ctl("pending").stdout)["PendingList"]
+                    matching = next(p for p in pending if p["target"] == "127.0.0.1" and p["port"] == port)
                 ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", matching["resolved_ip"], "--fingerprint", matching["host_key_fingerprint"])
                 expiring = spawn("printf EXPIRY_SESSION; sleep 120")
                 try:

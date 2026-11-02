@@ -271,12 +271,23 @@ async fn execute(args: &Args) -> Result<Outcome, ErrorCode> {
             }
         }
     };
-    let result = tokio::select! {
-        result = session => result,
-        _ = interrupts.recv() => Err(ErrorCode::Cancelled),
-        _ = terminate.recv() => Err(ErrorCode::Cancelled),
-        _ = hangup.recv() => Err(ErrorCode::Cancelled),
-        _ = quit.recv() => Err(ErrorCode::Cancelled),
+    let result = if interactive {
+        // In interactive mode, terminal is in raw mode and Ctrl-C/INT travels
+        // through stdin to the remote PTY as \x03 byte. Local process termination signals (TERM/HUP)
+        // still cancel the session.
+        tokio::select! {
+            result = session => result,
+            _ = terminate.recv() => Err(ErrorCode::Cancelled),
+            _ = hangup.recv() => Err(ErrorCode::Cancelled),
+        }
+    } else {
+        tokio::select! {
+            result = session => result,
+            _ = interrupts.recv() => Err(ErrorCode::Cancelled),
+            _ = terminate.recv() => Err(ErrorCode::Cancelled),
+            _ = hangup.recv() => Err(ErrorCode::Cancelled),
+            _ = quit.recv() => Err(ErrorCode::Cancelled),
+        }
     };
     result
 }
