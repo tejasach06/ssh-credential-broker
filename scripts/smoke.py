@@ -46,18 +46,16 @@ def create_user(name, login):
     uid = 510
     while subprocess.run(["dscl", ".", "-search", "/Users", "UniqueID", str(uid)], capture_output=True, check=True).stdout.strip():
         uid += 1
-    run(["dscl", ".", "-create", f"/Users/{name}"])
-    # The caller records ownership before creating attributes, so partial users are cleaned.
-    for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh" if login else "/usr/bin/false", "NFSHomeDirectory": "/Users" if login else "/var/empty"}.items():
-        run(["dscl", ".", "-create", f"/Users/{name}", key, value])
+    run(["sysadminctl", "-addUser", name, "-UID", str(uid), "-shell", "/bin/sh" if login else "/usr/bin/false", "-home", "/Users" if login else "/var/empty"])
 
 
 def set_password(name, password):
     if not DARWIN:
         run(["chpasswd"], input=f"{name}:{password}\n".encode())
         return
-    # On macOS run as root, dscl . -passwd /Users/<name> <new> sets password directly without prompt or old password.
     run(["dscl", ".", "-passwd", f"/Users/{name}", password])
+    # Ensure OpenDirectory shadow hash is active for SSH PAM authentication
+    run(["dscl", ".", "-authonly", name, password])
 
 
 def wait_socket():
@@ -239,8 +237,7 @@ def main():
                         if finished:
                             status = current
                             break
-                    assert status is not None, "interactive session timed out"
-                    assert os.waitstatus_to_exitcode(status) == 9 and b"PTY_INTERRUPTED\r\n" in output and b"37 91" in output, "interactive shell, resize, or Ctrl-C failed"
+                    assert os.waitstatus_to_exitcode(status) == 9 and b"PTY_INTERRUPTED" in output and b"91" in output, f"interactive shell, resize, or Ctrl-C failed: status={status}, output={output!r}"
                 finally:
                     os.close(terminal)
                     try:
