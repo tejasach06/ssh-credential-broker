@@ -379,7 +379,9 @@ def main():
                 renewed = json.dumps([{"username": login, "password": next_password}]).encode()
                 ctl("unlock", "--ttl-seconds", "60", "--harness-uid", str(identity.pw_uid), "--private-json-stdin", data=struct.pack(">I", len(renewed)) + renewed)
                 expect_error(execute(), "APPROVAL_REQUIRED")
-                ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", "127.0.0.1", "--fingerprint", fingerprint, "--attempt-budget", "2")
+                pending = json.loads(ctl("pending").stdout)["PendingList"]
+                matching = next(p for p in pending if p["target"] == "127.0.0.1" and p["port"] == port)
+                ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", matching["resolved_ip"], "--fingerprint", matching["host_key_fingerprint"], "--attempt-budget", "2")
                 sshd.terminate()
                 sshd.wait(timeout=5)
                 run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", work / "rekey"])
