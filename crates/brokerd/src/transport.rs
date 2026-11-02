@@ -148,10 +148,10 @@ impl client::Handler for Handler {
 async fn connect(address: SocketAddr, handler: Handler) -> Result<Connection, russh::Error> {
     let tcp = tokio::net::TcpStream::connect(address)
         .await
-        .map_err(|e| russh::Error::IO(e))?;
-    let native = tcp.into_std().map_err(|e| russh::Error::IO(e))?;
-    let socket = SocketGuard(native.try_clone().map_err(|e| russh::Error::IO(e))?);
-    let tcp = tokio::net::TcpStream::from_std(native).map_err(|e| russh::Error::IO(e))?;
+        .map_err(russh::Error::IO)?;
+    let native = tcp.into_std().map_err(russh::Error::IO)?;
+    let socket = SocketGuard(native.try_clone().map_err(russh::Error::IO)?);
+    let tcp = tokio::net::TcpStream::from_std(native).map_err(russh::Error::IO)?;
     let config = client::Config {
         channel_buffer_size: 8,
         window_size: 64 * 1024,
