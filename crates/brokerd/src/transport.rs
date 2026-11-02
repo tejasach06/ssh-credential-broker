@@ -419,7 +419,9 @@ async fn execute_connected(
                 return Err(Failure(ErrorCode::Unsupported));
             }
             attempt.record_auth_rejection()?;
-            if !remaining_methods.contains(&russh::MethodKind::Password) {
+            if !remaining_methods.is_empty()
+                && !remaining_methods.contains(&russh::MethodKind::Password)
+            {
                 return Err(Failure(ErrorCode::Unsupported));
             }
         }
