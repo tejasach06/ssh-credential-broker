@@ -424,6 +424,7 @@ async fn execute_connected(
             {
                 return Err(Failure(ErrorCode::Unsupported));
             }
+            return Err(Failure(ErrorCode::AuthenticationRejected));
         }
         // A fresh transport is required for the next credential.
         drop(connection);
