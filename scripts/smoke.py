@@ -379,7 +379,7 @@ def main():
                 renewed = json.dumps([{"username": login, "password": next_password}]).encode()
                 ctl("unlock", "--ttl-seconds", "60", "--harness-uid", str(identity.pw_uid), "--private-json-stdin", data=struct.pack(">I", len(renewed)) + renewed)
                 expect_error(execute(), "APPROVAL_REQUIRED")
-                ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", "127.0.0.1", "--fingerprint", fingerprint)
+                ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", "127.0.0.1", "--fingerprint", fingerprint, "--attempt-budget", "2")
                 sshd.terminate()
                 sshd.wait(timeout=5)
                 run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", work / "rekey"])
@@ -394,11 +394,15 @@ def main():
                     except OSError:
                         assert sshd.poll() is None and time.monotonic() < deadline, "rekeyed fixture sshd unavailable"
                         time.sleep(0.1)
-                # Add budget attempt so rekey attempt can be made
+                # First request after sshd rekey encounters the changed host key during connect,
+                # invalidates the approval, and returns HOST_KEY_MISMATCH.
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 rekey_res = execute()
                 print(f"DEBUG: rekey execute result: rc={rekey_res.returncode}, stderr={rekey_res.stderr!r}", file=sys.stderr)
-                expect_error(rekey_res, "APPROVAL_REQUIRED")
+                expect_error(rekey_res, "HOST_KEY_MISMATCH")
+                # Second request sees the invalidated alias, probes the server to record pending,
+                # and returns APPROVAL_REQUIRED.
+                expect_error(execute(), "APPROVAL_REQUIRED")
                 ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", "127.0.0.1", "--fingerprint", new_fingerprint)
                 expiring = spawn("printf EXPIRY_SESSION; sleep 120")
                 try:
