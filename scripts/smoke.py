@@ -46,8 +46,12 @@ def create_user(name, login):
     uid = 510
     while subprocess.run(["dscl", ".", "-search", "/Users", "UniqueID", str(uid)], capture_output=True, check=True).stdout.strip():
         uid += 1
-    run(["sysadminctl", "-addUser", name, "-UID", str(uid), "-shell", "/bin/sh" if login else "/usr/bin/false", "-home", "/Users" if login else "/var/empty"])
-
+    if login:
+        run(["sysadminctl", "-addUser", name, "-UID", str(uid), "-shell", "/bin/sh", "-home", "/Users", "-password", "placeholder"])
+    else:
+        run(["dscl", ".", "-create", f"/Users/{name}"])
+        for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/usr/bin/false", "NFSHomeDirectory": "/var/empty"}.items():
+            run(["dscl", ".", "-create", f"/Users/{name}", key, value])
 
 def set_password(name, password):
     if not DARWIN:
@@ -103,7 +107,8 @@ def main():
                 Path("/run/sshd").mkdir(mode=0o755)
                 made_sshd_dir = True
             config = work / "sshd_config"
-            config.write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {work / 'host_key'}\nPidFile {work / 'sshd.pid'}\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nPubkeyAuthentication no\nPermitEmptyPasswords no\nPermitRootLogin no\nUsePAM {'yes' if not DARWIN else 'no'}\nPerSourcePenalties no\nAllowUsers {login}\nAllowTcpForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitTTY yes\nLogLevel VERBOSE\n")
+            penalties = "PerSourcePenalties no\n" if DARWIN else ""
+            config.write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {work / 'host_key'}\nPidFile {work / 'sshd.pid'}\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nPubkeyAuthentication no\nPermitEmptyPasswords no\nPermitRootLogin no\nUsePAM {'yes' if not DARWIN else 'no'}\n{penalties}AllowUsers {login}\nAllowTcpForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitTTY yes\nLogLevel VERBOSE\n")
             run(["/usr/sbin/sshd", "-t", "-f", config])
             with (work / "sshd.log").open("wb") as log:
                 sshd = subprocess.Popen(["/usr/sbin/sshd", "-D", "-e", "-f", str(config)], stdout=log, stderr=log)
