@@ -32,8 +32,12 @@ INSTALLED = Path("/opt/ssh-credential-broker/bin")
 
 
 def run(args, **kwargs):
-    return subprocess.run([str(arg) for arg in args], check=True, capture_output=True, timeout=45, **kwargs)
-
+    try:
+        return subprocess.run([str(arg) for arg in args], check=True, capture_output=True, timeout=45, **kwargs)
+    except subprocess.CalledProcessError as exc:
+        if exc.stdout or exc.stderr:
+            print(f"FAILED: {' '.join(str(a) for a in args)}\nstdout: {exc.stdout.decode(errors='replace')}\nstderr: {exc.stderr.decode(errors='replace')}", file=sys.stderr)
+        raise
 
 def create_user(name, login):
     if not DARWIN:
@@ -190,8 +194,9 @@ def main():
                 assert rejected.returncode == 125 and json.loads(rejected.stderr)["code"] in ("AUTHENTICATION_REJECTED", "BUDGET_EXHAUSTED"), "ordered first credential did not fail safely"
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 result = execute("printf COMMAND_OK")
-                assert result.returncode == 0 and result.stdout == b"COMMAND_OK", f"next ordered credential failed: rc={result.returncode}, stdout={result.stdout!r}, stderr={result.stderr!r}"
                 observed_auth = (work / "sshd.log").read_bytes()
+                print(f"DEBUG: after 2nd attempt, sshd.log:\n{observed_auth.decode(errors='replace')}", file=sys.stderr)
+                assert result.returncode == 0 and result.stdout == b"COMMAND_OK", f"next ordered credential failed: rc={result.returncode}, stdout={result.stdout!r}, stderr={result.stderr!r}"
                 assert b"Failed password" in observed_auth and b"Accepted password" in observed_auth, "fixture did not observe the ordered rejected and accepted authentications"
                 expect_error(execute(), "BUDGET_EXHAUSTED")
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "6")
