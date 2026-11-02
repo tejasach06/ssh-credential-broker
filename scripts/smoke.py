@@ -262,8 +262,11 @@ def main():
                 dns_pinning(ctl, drop, INSTALLED, RUNTIME, port, fingerprint, token, work / "sshd.log")
                 # Cached failure must stop at renewal, then resume after the rejected cached entry.
                 set_password(login, next_password)
-                # First attempt with changed password fails authentication and sets renewal_required.
+                # Add 1 attempt so the cached credential can be tried against the changed password.
+                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
+                # Trying with changed password consumes the budget attempt, fails authentication and sets renewal_required.
                 expect_error(execute(), "AUTHENTICATION_REJECTED")
+                # Next attempt without resume fails immediately with RENEWAL_REQUIRED.
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 expect_error(execute(), "RENEWAL_REQUIRED")
                 ctl("resume", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
