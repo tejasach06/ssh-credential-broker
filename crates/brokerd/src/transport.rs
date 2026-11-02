@@ -145,22 +145,20 @@ impl client::Handler for Handler {
     }
 }
 
-async fn connect(address: SocketAddr, handler: Handler) -> Result<Connection, Failure> {
+async fn connect(address: SocketAddr, handler: Handler) -> Result<Connection, russh::Error> {
     let tcp = tokio::net::TcpStream::connect(address)
         .await
-        .map_err(network)?;
-    let native = tcp.into_std().map_err(network)?;
-    let socket = SocketGuard(native.try_clone().map_err(network)?);
-    let tcp = tokio::net::TcpStream::from_std(native).map_err(network)?;
+        .map_err(|e| russh::Error::IO(e))?;
+    let native = tcp.into_std().map_err(|e| russh::Error::IO(e))?;
+    let socket = SocketGuard(native.try_clone().map_err(|e| russh::Error::IO(e))?);
+    let tcp = tokio::net::TcpStream::from_std(native).map_err(|e| russh::Error::IO(e))?;
     let config = client::Config {
         channel_buffer_size: 8,
         window_size: 64 * 1024,
         maximum_packet_size: 32 * 1024,
         ..Default::default()
     };
-    let handle = client::connect_stream(Arc::new(config), tcp, handler)
-        .await
-        .map_err(network)?;
+    let handle = client::connect_stream(Arc::new(config), tcp, handler).await?;
     Ok(Connection {
         handle,
         _socket: socket,
@@ -305,7 +303,14 @@ async fn execute_connected(
                 approval: None,
             };
             // The probe deliberately rejects the key before any SSH user authentication.
-            let _ = bounded(connect(address, handler)).await?;
+            let _ = bounded(async {
+                match connect(address, handler).await {
+                    Ok(_) => Ok(()),
+                    Err(russh::Error::UnknownKey) => Ok(()),
+                    Err(e) => Err(network(e)),
+                }
+            })
+            .await?;
             let key = observed
                 .lock()
                 .map_err(network)?
@@ -342,20 +347,20 @@ async fn execute_connected(
             approval: Some((state.clone(), token.clone(), approved.clone())),
         };
         let address = SocketAddr::new(approved.pinned_ip.parse::<IpAddr>().map_err(network)?, port);
-        let result = bounded(connect(address, handler)).await?;
-        let mut connection = match result {
-            Ok(connection) => connection,
-            Err(error) => {
-                let key = observed.lock().map_err(network)?.clone();
-                if let Some(key) = key {
-                    if let Err(mismatch) = state.verify_host_key(token, &approved, &key.fingerprint)
-                    {
-                        return Err(mismatch.into());
+        let connect_fut = async {
+            match connect(address, handler).await {
+                Ok(conn) => Ok(conn),
+                Err(russh::Error::UnknownKey) => {
+                    let key = observed.lock().map_err(network)?.clone();
+                    if let Some(key) = key {
+                        state.verify_host_key(token, &approved, &key.fingerprint)?;
                     }
+                    Err(Failure(ErrorCode::TransportFailure))
                 }
-                return Err(error);
+                Err(e) => Err(network(e)),
             }
         };
+        let mut connection = bounded(connect_fut).await??;
         let authentication = attempt.commit_credentials(|credential| {
             connection
                 .handle
