@@ -46,21 +46,18 @@ def create_user(name, login):
     uid = 510
     while subprocess.run(["dscl", ".", "-search", "/Users", "UniqueID", str(uid)], capture_output=True, check=True).stdout.strip():
         uid += 1
-    if login:
-        run(["dscl", ".", "-create", f"/Users/{name}"])
-        for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh", "NFSHomeDirectory": "/var/empty", "AuthenticationAuthority": ";LocalCachedUser;"}.items():
-            run(["dscl", ".", "-create", f"/Users/{name}", key, value])
-    else:
-        run(["dscl", ".", "-create", f"/Users/{name}"])
-        for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/usr/bin/false", "NFSHomeDirectory": "/var/empty"}.items():
-            run(["dscl", ".", "-create", f"/Users/{name}", key, value])
+    run(["dscl", ".", "-create", f"/Users/{name}"])
+    for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh" if login else "/usr/bin/false", "NFSHomeDirectory": "/var/empty"}.items():
+        run(["dscl", ".", "-create", f"/Users/{name}", key, value])
 
 def set_password(name, password):
     if not DARWIN:
         run(["chpasswd"], input=f"{name}:{password}\n".encode())
         return
+    # Create and verify shadow hash on macOS OpenDirectory
     run(["dscl", ".", "-passwd", f"/Users/{name}", password])
-    run(["dscl", ".", "-passwd", f"/Users/{name}", password])
+    # Try to verify or create shadowhash node
+    subprocess.run(["dscl", ".", "-authonly", name, password], capture_output=True)
 
 
 def wait_socket():
@@ -398,7 +395,9 @@ def main():
                         time.sleep(0.1)
                 # Add budget attempt so rekey attempt can be made
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
-                expect_error(execute(), "HOST_KEY_MISMATCH")
+                rekey_res = execute()
+                print(f"DEBUG: rekey execute result: rc={rekey_res.returncode}, stderr={rekey_res.stderr!r}", file=sys.stderr)
+                expect_error(rekey_res, "HOST_KEY_MISMATCH")
                 expect_error(execute(), "APPROVAL_REQUIRED")
                 ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", "127.0.0.1", "--fingerprint", new_fingerprint)
                 expiring = spawn("printf EXPIRY_SESSION; sleep 120")
