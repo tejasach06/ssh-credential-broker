@@ -166,7 +166,7 @@ def main():
                 assert result.returncode == 0 and result.stdout == b"COMMAND_OK", f"next ordered credential failed: rc={result.returncode}, stdout={result.stdout!r}, stderr={result.stderr!r}"
                 assert b"Failed password" in observed_auth and b"Accepted password" in observed_auth, "fixture did not observe the ordered rejected and accepted authentications"
                 expect_error(execute(), "BUDGET_EXHAUSTED")
-                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "6")
+                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "5")
                 # Invalid outcome descriptors must be rejected before authentication or command work.
                 auth_before = len(re.findall(rb"(Failed|Accepted) password", (work / "sshd.log").read_bytes()))
                 marker = Path("/tmp") / ("broker-smoke-outcome-" + token)
@@ -262,18 +262,11 @@ def main():
                 dns_pinning(ctl, drop, INSTALLED, RUNTIME, port, fingerprint, token, work / "sshd.log")
                 # Cached failure must stop at renewal, then resume after the rejected cached entry.
                 set_password(login, next_password)
-                # Add 1 attempt so the cached credential can be tried against the changed password.
                 ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
-                # Trying with changed password consumes the budget attempt, fails authentication and sets renewal_required.
                 expect_error(execute(), "AUTHENTICATION_REJECTED")
-                # Next attempt without resume fails immediately with RENEWAL_REQUIRED.
-                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 expect_error(execute(), "RENEWAL_REQUIRED")
-                ctl("resume", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
+                ctl("resume", "127.0.0.1", "--port", str(port), "--additional-attempts", "2")
                 assert execute("true").returncode == 0, "explicit renewal did not use the next credential"
-                # Budget was already consumed by line 273's execute("true"); do not add budget before racing so budget is 0,
-                # or add exactly 1 attempt so exactly one racer succeeds and the other fails with BUDGET_EXHAUSTED.
-                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 def spawn(command):
                     return subprocess.Popen([str(INSTALLED / "broker-ssh"), "--socket", str(RUNTIME / "exec.sock"), "127.0.0.1", "--port", str(port), "--", command], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=drop)
                 racers = [spawn("printf RACER"), spawn("printf RACER")]

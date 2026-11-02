@@ -31,12 +31,13 @@ if [ "$PURGE" = 1 ]; then
             primaries=$(getent passwd | awk -F: -v gid="$gid" '$4 == gid { print $1 }')
         else
             members=$(dscl . -read "/Groups/$group" GroupMembership 2>/dev/null | cut -d' ' -f2- || true)
-            primaries=$(dscl . -search /Users PrimaryGroupID "$gid" | awk '{print $1}')
+            primaries=$(dscl . -search /Users PrimaryGroupID "$gid" 2>/dev/null | awk '{print $1}')
         fi
         for member in $members $primaries; do
             case "$group:$member" in
                 "$BROKER:"|"$EXEC_GROUP:"|"$ADMIN_GROUP:") ;;
                 "$BROKER:$BROKER"|"$EXEC_GROUP:$BROKER"|"$EXEC_GROUP:$HARNESS"|"$ADMIN_GROUP:$BROKER"|"$ADMIN_GROUP:$OPERATOR") ;;
+                "$BROKER:$BROKER_UID"|"$BROKER:$BROKER_GID") ;;
                 *) fail "group $group has an unrelated member ($member); refusing account purge" ;;
             esac
         done
