@@ -1,0 +1,48 @@
+name: Native Linux and macOS
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install Linux smoke dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes openssh-server
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run tests
+        run: cargo test --workspace --all-targets
+      - name: Build native release binaries
+        run: cargo build --workspace --release --bins
+      - name: Run isolated native SSH smoke
+        run: sudo python3 scripts/smoke.py --bin-dir target/release
+      - name: Package native binaries
+        shell: bash
+        run: |
+          mkdir -p release
+          tar -czf "release/ssh-credential-broker-$(uname -s)-$(uname -m).tar.gz" -C target/release ssh-brokerd broker-ssh brokerctl
+          if [ "$(uname -s)" = Darwin ]; then
+            shasum -a 256 release/*.tar.gz > release/SHA256SUMS
+          else
+            sha256sum release/*.tar.gz > release/SHA256SUMS
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ runner.os }}-${{ runner.arch }}
+          path: release/
+          if-no-files-found: error

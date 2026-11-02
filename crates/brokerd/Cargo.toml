@@ -1,0 +1,20 @@
+[package]
+name = "brokerd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ssh-brokerd"
+path = "src/main.rs"
+
+[dependencies]
+broker-core = { path = "../broker-core" }
+broker-proto = { path = "../broker-proto" }
+tokio.workspace = true
+russh.workspace = true
+clap.workspace = true
+libc.workspace = true
+zeroize.workspace = true
+futures-util.workspace = true
+bytes.workspace = true

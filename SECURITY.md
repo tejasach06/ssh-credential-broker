@@ -1,0 +1,51 @@
+# Security contract
+
+The authoritative requirements and acceptance scenarios are in [GitHub issue #1](https://github.com/tejasach06/ssh-credential-broker/issues/1). This document describes the intended security boundary and deployment requirements. It is not a claim that every platform acceptance scenario has passed.
+
+## Trusted and untrusted identities
+
+The operating system, kernel, administrator, service manager, installed broker binaries, and trusted operator session are trusted. The harness and its child processes are untrusted. The harness must run as a separate unprivileged UID, without root, sudo, administrator, debugger, broker-account, or service-management privileges. A root operator is permitted. A root harness or shared operator and harness UID is not.
+
+The daemon runs as the dedicated unprivileged `sshbroker` account, with a dedicated primary group. Only the broker and harness join `sshbroker-exec`. Only the broker and trusted operator join `sshbroker-admin`. Runtime traversal is mode `0751`, while each Unix socket is mode `0660` with its separate group. Protocol authorization uses peer credentials in addition to these filesystem controls.
+
+The administrator must establish that the harness cannot elevate privilege through host-specific rules. Group membership checks alone do not prove this. Custom sudo rules, privileged container engines, writable root jobs, debugger entitlements, inherited descriptors, and shared trusted terminals can invalidate the boundary. Do not run the operator credential producer inside the harness environment.
+
+The installer rejects harness membership in `root`, `sudo`, `wheel`, `admin`, `docker`, `lxd`, `incus`, `libvirt`, `sshbroker`, and `sshbroker-admin`. It does not claim to verify arbitrary sudoers configurations, all VM control channels, or every platform entitlement. The operator must audit effective privilege independently.
+
+## Files and service execution
+
+Binaries, configuration, service definitions, and their parent directories are root-owned and not writable by the harness. The installer refuses unsafe ownership, group/world write permissions, symlink destination files, and macOS write-granting ACLs instead of weakening unrelated paths. It copies native release binaries to `/opt/ssh-credential-broker/bin` and records only identities in a root-only installation record. Verify release provenance before running the root installer.
+
+Linux uses systemd `User=sshbroker`, a dedicated primary group, both supplementary socket groups, an empty capability set, `NoNewPrivileges`, a read-only filesystem namespace except the runtime path, and `LimitCORE=0`. macOS uses launchd `UserName=sshbroker`, `GroupName=sshbroker`, initialized supplementary groups, and both hard and soft core limits of zero. macOS does not inherit Linux's systemd sandbox. The daemon's platform protections and native acceptance evidence remain necessary.
+
+The broker needs outbound SSH network access. Service installation does not weaken SSH server configuration, install client keys, disable operating-system protections, or grant the harness administrator rights. Socket group assignment does not require root because the broker belongs to both dedicated socket groups.
+
+## Credential and destination lifetime
+
+The credential pool exists only in memory. Passwords and usernames are not accepted as command-line options or environment variables. The operator uses hidden terminal prompts or an explicitly private framed input stream. There is no persistent vault, keychain integration, credential file format, or restart recovery.
+
+Each grant fixes its pool and authorized harness UID. Unlocking an active grant is rejected. Lock and expiry invalidate authorization before cancellation and clear credentials, approvals, budgets, cursors, and matches. Restart starts locked. Work that has not committed a password submission cannot submit after invalidation. An already committed submission may be in flight and remains charged. A completed authentication cannot create a channel after authorization is invalidated.
+
+Before any username or password submission, the operator must approve the target's numeric destination, port, and SSH host-key fingerprint. Verify the fingerprint through an independent trusted source. Accepting a fingerprint supplied only by an untrusted harness or network does not establish server identity. Approvals last only for the grant. DNS aliases cannot bypass numeric pinning or create a separate budget for the same approved server identity. Changed host keys fail closed.
+
+Every password submission consumes budget, including a successful cached login. A password possibly transmitted before cancellation or transport failure remains consumed. Rejected credentials are not automatically retried within the grant. Cached rejection requires explicit operator renewal rather than scanning the rest of the pool. Budget and delay settings cannot guarantee protection from arbitrary server lockout policies.
+
+## Accepted limits
+
+- An approved SSH server receives the password submitted to it. A compromised approved server can capture that password.
+- Full remote shell access exposes the remote username through normal operating-system commands. It can reveal remote secrets, change passwords, create users, install access mechanisms, or recover reused credentials from server files. Local pool isolation does not prevent these actions.
+- The broker does not redact remote output. Filtering would corrupt arbitrary binary streams and cannot make unrestricted shell access secret-safe.
+- The broker cannot hide secrets from local root, the kernel, a compromised operator, a compromised broker binary, or an attacker with broker debugging privileges.
+- Secret buffers are cleared where controlled, and core dumps are disabled for the service. Absolute erasure is not guaranteed. Allocators, SSH-library copies, kernel buffers, swap, hibernation images, and platform crash-report infrastructure can retain data. Host administrators must assess those mechanisms separately.
+- Lock, expiry, cancellation, and daemon termination close broker-owned SSH transports. They do not guarantee remote process cleanup, undo remote changes, terminate detached processes, or remove access mechanisms created remotely.
+- Disconnecting SSH cannot recall a password already delivered to a transport or remote server.
+
+There is no forwarding, agent forwarding, X11 forwarding, SFTP, SCP, arbitrary subsystem access, public-key fallback, or keyboard-interactive fallback. Remote sudo and application password prompts receive no automatic broker assistance.
+
+## Diagnostics and verification
+
+Ordinary diagnostics must not contain pool usernames, passwords, credential identifiers, raw authentication prompts, server banners, remote commands, or terminal contents. Classified stable error codes cross the client boundary instead of raw library errors. Destination names, numeric addresses, host fingerprints, session identifiers, and timing are potentially sensitive metadata. There is no telemetry or raw SSH packet logging in the initial design.
+
+The native smoke workflow uses generated credentials and disposable SSH server identities. Its structured report lists observed coverage and local identities. It does not prove all issue acceptance scenarios. Native Linux and macOS evidence, including debugger denial and service replacement denial, is required before claiming isolation on either platform. A cross-compiled Windows executable is not a supported Windows release.
+
+Do not attach passwords, private input frames, process dumps, raw packets, terminal recordings, or production SSH logs to a public report. Report security concerns through the repository's private vulnerability reporting channel if available. If it is unavailable, contact the repository owner privately to arrange a secure channel before sharing sensitive evidence. Public issues can contain a credential-free description of the affected version and platform.
