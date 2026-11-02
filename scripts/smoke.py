@@ -48,7 +48,7 @@ def create_user(name, login):
         uid += 1
     if login:
         run(["dscl", ".", "-create", f"/Users/{name}"])
-        for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh", "NFSHomeDirectory": "/var/empty"}.items():
+        for key, value in {"UniqueID": str(uid), "PrimaryGroupID": "20", "UserShell": "/bin/sh", "NFSHomeDirectory": "/var/empty", "AuthenticationAuthority": ";LocalCachedUser;"}.items():
             run(["dscl", ".", "-create", f"/Users/{name}", key, value])
     else:
         run(["dscl", ".", "-create", f"/Users/{name}"])
@@ -109,7 +109,7 @@ def main():
                 made_sshd_dir = True
             config = work / "sshd_config"
             penalties = "PerSourcePenalties no\n" if DARWIN else ""
-            config.write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {work / 'host_key'}\nPidFile {work / 'sshd.pid'}\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nPubkeyAuthentication no\nPermitEmptyPasswords no\nPermitRootLogin no\nUsePAM {'yes' if not DARWIN else 'no'}\n{penalties}AllowUsers {login}\nAllowTcpForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitTTY yes\nLogLevel VERBOSE\n")
+            config.write_text(f"Port {port}\nListenAddress 127.0.0.1\nHostKey {work / 'host_key'}\nPidFile {work / 'sshd.pid'}\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nPubkeyAuthentication no\nPermitEmptyPasswords no\nPermitRootLogin no\nUsePAM yes\n{penalties}AllowUsers {login}\nAllowTcpForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitTTY yes\nLogLevel VERBOSE\n")
             run(["/usr/sbin/sshd", "-t", "-f", config])
             with (work / "sshd.log").open("wb") as log:
                 sshd = subprocess.Popen(["/usr/sbin/sshd", "-D", "-e", "-f", str(config)], stdout=log, stderr=log)
@@ -396,6 +396,8 @@ def main():
                     except OSError:
                         assert sshd.poll() is None and time.monotonic() < deadline, "rekeyed fixture sshd unavailable"
                         time.sleep(0.1)
+                # Add budget attempt so rekey attempt can be made
+                ctl("budget", "127.0.0.1", "--port", str(port), "--additional-attempts", "1")
                 expect_error(execute(), "HOST_KEY_MISMATCH")
                 expect_error(execute(), "APPROVAL_REQUIRED")
                 ctl("approve", "127.0.0.1", "--port", str(port), "--pinned-ip", "127.0.0.1", "--fingerprint", new_fingerprint)
