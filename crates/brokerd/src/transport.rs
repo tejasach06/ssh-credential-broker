@@ -366,7 +366,7 @@ async fn execute_connected(
             drop(attempt);
             let (channel_future, lease) = state
                 .commit_session(&authenticated, || connection.handle.channel_open_session())?;
-            let mut channel = bounded(guarded(state, token, channel_future))
+            let channel = bounded(guarded(state, token, channel_future))
                 .await??
                 .map_err(network)?;
             drop(guard);
