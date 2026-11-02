@@ -60,7 +60,9 @@ if [ "$PURGE" = 1 ]; then
     remove_member "$OPERATOR" "$ADMIN_GROUP"
     if [ "$OS" = Linux ]; then
         userdel "$BROKER"
-        for group in "$EXEC_GROUP" "$ADMIN_GROUP" "$BROKER"; do groupdel "$group"; done
+        for group in "$EXEC_GROUP" "$ADMIN_GROUP" "$BROKER"; do
+            if getent group "$group" >/dev/null; then groupdel "$group"; fi
+        done
     else
         dscl . -delete "/Users/$BROKER"
         for group in "$EXEC_GROUP" "$ADMIN_GROUP" "$BROKER"; do dscl . -delete "/Groups/$group"; done
