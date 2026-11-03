@@ -59,14 +59,16 @@ jobs:
         shell: powershell
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
-      - name: Use installed GNU compiler
+      - name: Expose installed Git Bash and GNU tools
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path C:/mingw64/bin/gcc.exe)) { throw 'GNU compiler missing at C:/mingw64/bin' }
-          'C:/mingw64/bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding ascii -Append
+          foreach ($tool in @('C:/Program Files/Git/bin/bash.exe', 'C:/mingw64/bin/gcc.exe')) {
+            if (-not (Test-Path $tool)) { throw "Required workstation tool missing: $tool" }
+          }
+          @('C:/Program Files/Git/bin', 'C:/Program Files/Git/usr/bin', 'C:/mingw64/bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding ascii -Append
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
       - name: Verify native Windows client build and tests
         run: |
           cargo test --locked --workspace --all-targets --target x86_64-pc-windows-gnu

@@ -20,6 +20,7 @@ Assert-BrokerAdministrator
 if (-not $DisposableMachine) { throw 'This fixture is allowed only on an explicitly disposable Windows VM.' }
 $stage='fixture_prerequisites'
 $result='failed'
+$failure=$null
 $work=$null
 $task=$null
 $taskRegistered=$false
@@ -42,28 +43,42 @@ function Remove-FixtureTree([string] $Path) {
     Remove-Item -LiteralPath $Path -Force
 }
 try {
+    $stage='prerequisite_native_helper_compilation'
     Add-Type -Path (Join-Path $PSScriptRoot 'windows-native.cs')
+    $stage='prerequisite_no_existing_broker'
     Assert-Fixture (-not (Test-Path -LiteralPath $script:BrokerRoot) -and -not (Get-BrokerServiceRecord))
+    $stage='prerequisite_no_existing_sshd'
     Assert-Fixture (@(Get-Process -Name sshd -ErrorAction SilentlyContinue).Count -eq 0)
+    $stage='prerequisite_git_discovery'
     $gitCandidates=@((Join-Path $env:ProgramFiles 'Git\bin\bash.exe'))
     $gitCommand=Get-Command git.exe -ErrorAction SilentlyContinue
     if ($gitCommand) { $gitCandidates += Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($gitCommand.Source))) 'bin\bash.exe' }
     $bash=@($gitCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
+    $stage='prerequisite_git_bash_exists'
     Assert-Fixture ($bash.Count -eq 1)
     $bash=[string]$bash[0]
+    $stage='prerequisite_git_bash_plain_path'
     Assert-BrokerPlainPath $bash
     $gitRoot=[IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($bash))
-    foreach ($tool in @('cat.exe','id.exe','stty.exe','sleep.exe')) { Assert-Fixture (Test-Path -LiteralPath (Join-Path $gitRoot ('usr\bin\'+$tool)) -PathType Leaf) }
+    foreach ($tool in @('cat.exe','id.exe','stty.exe','sleep.exe')) {
+        $stage='prerequisite_git_tool_' + [IO.Path]::GetFileNameWithoutExtension($tool)
+        Assert-Fixture (Test-Path -LiteralPath (Join-Path $gitRoot ('usr\bin\'+$tool)) -PathType Leaf)
+    }
+    $stage='prerequisite_windows_sshd_discovery'
     $sshd=Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
     if (-not (Test-Path -LiteralPath $sshd -PathType Leaf)) {
-        $stage='install_windows_openssh_capability'
+        $stage='prerequisite_openssh_capability_query'
         $feature=Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0'
         Assert-Fixture ($feature.State -ne 'Installed')
         $addedCapability=$true
+        $stage='install_windows_openssh_capability'
         $installation=Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0'
+        $stage='prerequisite_installed_sshd_without_reboot'
         Assert-Fixture (-not $installation.RestartNeeded -and (Test-Path -LiteralPath $sshd -PathType Leaf))
     }
+    $stage='prerequisite_no_existing_sshd_after_install'
     Assert-Fixture (@(Get-Process -Name sshd -ErrorAction SilentlyContinue).Count -eq 0)
+    $stage='prerequisite_keygen_discovery'
     $keygen=Join-Path ([IO.Path]::GetDirectoryName($sshd)) 'ssh-keygen.exe'
     Assert-Fixture (Test-Path -LiteralPath $keygen -PathType Leaf)
     $stage='create_private_fixture'
@@ -211,6 +226,7 @@ try {
     & (Join-Path $PSScriptRoot 'smoke-windows.ps1') -CreateDisposableAccounts -BinDirectory $BinDirectory -DisposableMachine -DisposableEndpoint -EndpointHost '127.0.0.1' -Port $port -PinnedAddress '127.0.0.1' -HostKeyFingerprint $fingerprint -RemoteCredential $remote -AuthenticationAuditScript $audit -RotateHostKey $rotate | ForEach-Object { $smokeReports.Add([string]$_) }
     $result='passed'
 } catch {
+    $failure=[ordered]@{exceptionType=$_.Exception.GetType().FullName;scriptLine=$_.InvocationInfo.ScriptLineNumber}
     $result='failed'
 } finally {
     if ($taskRegistered) {
@@ -256,5 +272,5 @@ try {
 if ($cleanup.Count -gt 0) { $result='failed' }
 $nested=$null
 if ($smokeReports.Count -gt 0) { try { $nested=$smokeReports[$smokeReports.Count-1] | ConvertFrom-Json } catch { $result='failed' } }
-[ordered]@{fixture='real-localhost-windows-openssh';result=$result;stage=$stage;smoke=$nested;cleanup=if ($cleanup.Count -eq 0) {'passed'} else {@($cleanup)}} | ConvertTo-Json -Depth 12 -Compress
+[ordered]@{fixture='real-localhost-windows-openssh';result=$result;stage=$stage;failure=$failure;smoke=$nested;cleanup=if ($cleanup.Count -eq 0) {'passed'} else {@($cleanup)}} | ConvertTo-Json -Depth 12 -Compress
 if ($result -ne 'passed') { throw 'Local native SSH fixture/smoke failed; see secret-free structured report.' }
