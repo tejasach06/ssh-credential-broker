@@ -22,8 +22,22 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run tests
         run: cargo test --workspace --all-targets
-      - name: Build release binaries
+      - name: Build native Linux release binaries
         run: cargo build --workspace --release --bins
+      - name: Build Windows release binaries
+        run: cargo build --workspace --release --bins --target x86_64-pc-windows-gnu
+      - name: Package Windows installation
+        run: |
+          mkdir -p release/windows/bin
+          cp target/x86_64-pc-windows-gnu/release/ssh-brokerd.exe target/x86_64-pc-windows-gnu/release/broker-ssh.exe target/x86_64-pc-windows-gnu/release/brokerctl.exe release/windows/bin/
+          cp -r scripts deploy README.md SECURITY.md CHANGELOG.md release/windows/
+          tar -czf release/ssh-credential-broker-Windows-x86_64.tar.gz -C release/windows .
+          cd release && sha256sum ssh-credential-broker-Windows-x86_64.tar.gz > SHA256SUMS-windows.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-Windows-x86_64-vm101
+          path: release/ssh-credential-broker-Windows-x86_64.tar.gz
+          if-no-files-found: error
 
   native:
     strategy:
