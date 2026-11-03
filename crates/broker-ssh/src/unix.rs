@@ -1,13 +1,14 @@
 #[path = "unix_io.rs"]
 mod unix_io;
 
+use crate::outcome::{remote_signal, report, Outcome};
 use broker_proto::{
     read_frame, write_frame, ErrorCode, ExecRequest, ExecResponse, PtyRequest, WireMessage,
     MAX_STREAM_DATA, PROTOCOL_VERSION,
 };
 use clap::Parser;
 use std::fs::File;
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::FromRawFd;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -50,24 +51,6 @@ fn default_socket(standalone: bool) -> PathBuf {
     }
 }
 
-struct Outcome {
-    exit: u8,
-    error: Option<ErrorCode>,
-    remote_status: Option<u32>,
-    signal: Option<String>,
-}
-
-impl Outcome {
-    fn failure(error: ErrorCode) -> Self {
-        Self {
-            exit: 125,
-            error: Some(error),
-            remote_status: None,
-            signal: None,
-        }
-    }
-}
-
 fn outcome_file(descriptor: Option<i32>) -> io::Result<Option<File>> {
     let Some(fd) = descriptor else {
         return Ok(None);
@@ -85,22 +68,6 @@ fn outcome_file(descriptor: Option<i32>) -> io::Result<Option<File>> {
         return Err(io::ErrorKind::PermissionDenied.into());
     }
     Ok(Some(file))
-}
-
-fn report(outcome: &Outcome, descriptor: Option<&mut File>) -> io::Result<()> {
-    let value = if let Some(error) = outcome.error {
-        serde_json::json!({ "outcome": "client_error", "code": error.as_str(), "message": error.message() })
-    } else if let Some(signal) = &outcome.signal {
-        serde_json::json!({ "outcome": "remote_signal", "code": "REMOTE_SIGNAL", "signal": signal })
-    } else {
-        serde_json::json!({ "outcome": "remote_exit", "exit_status": outcome.remote_status })
-    };
-    if let Some(file) = descriptor {
-        writeln!(file, "{value}")?;
-    } else if outcome.error.is_some() || outcome.signal.is_some() {
-        writeln!(std::io::stderr(), "{value}")?;
-    }
-    Ok(())
 }
 
 pub async fn run() -> u8 {
@@ -308,24 +275,4 @@ async fn execute(args: &Args) -> Result<Outcome, ErrorCode> {
         }
     };
     result
-}
-
-fn remote_signal(signal: &str) -> (&'static str, u8) {
-    match signal.strip_prefix("SIG").unwrap_or(signal) {
-        "HUP" => ("HUP", libc::SIGHUP as u8),
-        "INT" => ("INT", libc::SIGINT as u8),
-        "QUIT" => ("QUIT", libc::SIGQUIT as u8),
-        "ILL" => ("ILL", libc::SIGILL as u8),
-        "ABRT" => ("ABRT", libc::SIGABRT as u8),
-        "FPE" => ("FPE", libc::SIGFPE as u8),
-        "KILL" => ("KILL", libc::SIGKILL as u8),
-        "SEGV" => ("SEGV", libc::SIGSEGV as u8),
-        "PIPE" => ("PIPE", libc::SIGPIPE as u8),
-        "ALRM" => ("ALRM", libc::SIGALRM as u8),
-        "TERM" => ("TERM", libc::SIGTERM as u8),
-        "USR1" => ("USR1", libc::SIGUSR1 as u8),
-        "USR2" => ("USR2", libc::SIGUSR2 as u8),
-        "BUS" => ("BUS", libc::SIGBUS as u8),
-        _ => ("UNKNOWN", 0),
-    }
 }

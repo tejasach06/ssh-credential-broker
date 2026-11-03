@@ -1,3 +1,4 @@
+mod outcome;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]

@@ -108,32 +108,31 @@ impl ErrorCode {
         }
     }
 
-    pub fn from_code(code: &str) -> Option<Self> {
-        [
-            Self::InputError,
-            Self::BrokerLocked,
-            Self::ApprovalRequired,
-            Self::AuthenticationRejected,
-            Self::BudgetExhausted,
-            Self::HostKeyMismatch,
-            Self::TransportFailure,
-            Self::BrokerLock,
-            Self::BrokerExpired,
-            Self::RenewalRequired,
-            Self::ResourceLimit,
-            Self::PermissionDenied,
-            Self::Unsupported,
-            Self::ProtocolError,
-            Self::AlreadyUnlocked,
-            Self::NotFound,
-            Self::Cancelled,
-            Self::MissingRemoteStatus,
-            Self::RemoteSignal,
-            Self::LocalIo,
-            Self::InternalError,
-        ]
-        .into_iter()
-        .find(|value| value.as_str() == code)
+    pub const fn from_code(code: &str) -> Option<Self> {
+        match code.as_bytes() {
+            b"INPUT_ERROR" => Some(Self::InputError),
+            b"BROKER_LOCKED" => Some(Self::BrokerLocked),
+            b"APPROVAL_REQUIRED" => Some(Self::ApprovalRequired),
+            b"AUTHENTICATION_REJECTED" => Some(Self::AuthenticationRejected),
+            b"BUDGET_EXHAUSTED" => Some(Self::BudgetExhausted),
+            b"HOST_KEY_MISMATCH" => Some(Self::HostKeyMismatch),
+            b"TRANSPORT_FAILURE" => Some(Self::TransportFailure),
+            b"BROKER_LOCK" => Some(Self::BrokerLock),
+            b"BROKER_EXPIRED" => Some(Self::BrokerExpired),
+            b"RENEWAL_REQUIRED" => Some(Self::RenewalRequired),
+            b"RESOURCE_LIMIT" => Some(Self::ResourceLimit),
+            b"PERMISSION_DENIED" => Some(Self::PermissionDenied),
+            b"UNSUPPORTED" => Some(Self::Unsupported),
+            b"PROTOCOL_ERROR" => Some(Self::ProtocolError),
+            b"ALREADY_UNLOCKED" => Some(Self::AlreadyUnlocked),
+            b"NOT_FOUND" => Some(Self::NotFound),
+            b"CANCELLED" => Some(Self::Cancelled),
+            b"MISSING_REMOTE_STATUS" => Some(Self::MissingRemoteStatus),
+            b"REMOTE_SIGNAL" => Some(Self::RemoteSignal),
+            b"LOCAL_IO" => Some(Self::LocalIo),
+            b"INTERNAL_ERROR" => Some(Self::InternalError),
+            _ => None,
+        }
     }
 
     pub fn exec_response(self) -> ExecResponse {

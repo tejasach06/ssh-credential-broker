@@ -1,12 +1,12 @@
 #[path = "unix_input.rs"]
 mod unix_input;
+use crate::common::{report, write_response};
 
 use broker_proto::{
     read_frame, write_frame, AdminEnvelope, AdminRequest, AdminResponse, Credential, ErrorCode,
     WireMessage, MAX_CREDENTIALS, MAX_PASSWORD_LEN, MAX_USERNAME_LEN, PROTOCOL_VERSION,
 };
 use clap::{Parser, Subcommand};
-use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::net::UnixStream;
@@ -91,11 +91,6 @@ fn default_socket(standalone: bool) -> PathBuf {
     } else {
         PathBuf::from("/run/ssh-credential-broker/admin.sock")
     }
-}
-
-fn report(error: ErrorCode) {
-    let value = serde_json::json!({ "outcome": "client_error", "code": error.as_str(), "message": error.message() });
-    let _ = writeln!(std::io::stderr(), "{value}");
 }
 
 pub async fn run() -> u8 {
@@ -260,12 +255,5 @@ async fn execute(args: Args) -> Result<(), ErrorCode> {
     })
     .await
     .map_err(|_| ErrorCode::TransportFailure)??;
-    if let AdminResponse::Error { code, .. } = &response {
-        return Err(ErrorCode::from_code(code).unwrap_or(ErrorCode::ProtocolError));
-    }
-    let stdout = std::io::stdout();
-    let mut output = stdout.lock();
-    serde_json::to_writer(&mut output, &response).map_err(|_| ErrorCode::LocalIo)?;
-    output.write_all(b"\n").map_err(|_| ErrorCode::LocalIo)?;
-    Ok(())
+    write_response(&response)
 }

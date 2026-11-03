@@ -1,11 +1,10 @@
+use crate::outcome::{remote_signal, report, Outcome};
 use crate::windows_io::{self, terminal_size, Input, Output, Terminal};
 use broker_proto::{
     read_frame, write_frame, ErrorCode, ExecRequest, ExecResponse, PtyRequest, WireMessage,
     PROTOCOL_VERSION,
 };
 use clap::Parser;
-use std::fs::File;
-use std::io::{self, Write};
 use std::time::Duration;
 use tokio::io::AsyncWrite;
 use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
@@ -28,38 +27,6 @@ struct Args {
     /// Write structured outcomes to an inherited Windows HANDLE, separate from SSH output.
     #[arg(long)]
     outcome_handle: Option<usize>,
-}
-
-struct Outcome {
-    exit: u8,
-    error: Option<ErrorCode>,
-    remote_status: Option<u32>,
-    signal: Option<String>,
-}
-impl Outcome {
-    fn failure(error: ErrorCode) -> Self {
-        Self {
-            exit: 125,
-            error: Some(error),
-            remote_status: None,
-            signal: None,
-        }
-    }
-}
-fn report(outcome: &Outcome, descriptor: Option<&mut File>) -> io::Result<()> {
-    let value = if let Some(error) = outcome.error {
-        serde_json::json!({"outcome":"client_error", "code":error.as_str(), "message":error.message()})
-    } else if let Some(signal) = &outcome.signal {
-        serde_json::json!({"outcome":"remote_signal", "code":"REMOTE_SIGNAL", "signal":signal})
-    } else {
-        serde_json::json!({"outcome":"remote_exit", "exit_status":outcome.remote_status})
-    };
-    if let Some(file) = descriptor {
-        writeln!(file, "{value}")?;
-    } else if outcome.error.is_some() || outcome.signal.is_some() {
-        writeln!(std::io::stderr(), "{value}")?;
-    }
-    Ok(())
 }
 
 pub async fn run() -> u8 {
@@ -223,7 +190,7 @@ async fn execute(args: &Args) -> Result<Outcome, ErrorCode> {
                         signal: Some(signal),
                     } => {
                         return Ok(Outcome {
-                            exit: 128u8.saturating_add(remote_signal(&signal)),
+                            exit: 128u8.saturating_add(remote_signal(&signal).1),
                             error: None,
                             remote_status: None,
                             signal: Some(signal),
@@ -250,27 +217,6 @@ async fn execute(args: &Args) -> Result<Outcome, ErrorCode> {
     }
 }
 
-fn remote_signal(signal: &str) -> u8 {
-    // These are remote POSIX signal numbers, never Windows process signals.
-    match signal.strip_prefix("SIG").unwrap_or(signal) {
-        "HUP" => 1,
-        "INT" => 2,
-        "QUIT" => 3,
-        "ILL" => 4,
-        "ABRT" => 6,
-        "FPE" => 8,
-        "KILL" => 9,
-        "SEGV" => 11,
-        "PIPE" => 13,
-        "ALRM" => 14,
-        "TERM" => 15,
-        "USR1" => 10,
-        "USR2" => 12,
-        "BUS" => 7,
-        _ => 0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,9 +236,9 @@ mod tests {
     }
     #[test]
     fn remote_signals_use_posix_numbers() {
-        assert_eq!(remote_signal("SIGINT"), 2);
-        assert_eq!(remote_signal("TERM"), 15);
-        assert_eq!(remote_signal("unknown"), 0);
+        assert_eq!(remote_signal("SIGINT").1, 2);
+        assert_eq!(remote_signal("TERM").1, 15);
+        assert_eq!(remote_signal("unknown").1, 0);
     }
     #[test]
     fn native_cli_accepts_standalone_and_custom_pipe() {
