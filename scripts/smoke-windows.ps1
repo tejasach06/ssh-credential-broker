@@ -359,12 +359,15 @@ try {
     $report.result='passed'
 } catch {
     # No raw exception, CLI output, endpoint login, or credential enters diagnostics.
+    $base = $_.Exception
+    while ($base.InnerException) { $base = $base.InnerException }
     $report.failure=[ordered]@{
         check=$currentCheck
         code='native_windows_smoke_failed'
-        exceptionType=$_.Exception.GetType().FullName
+        exceptionType=$base.GetType().FullName
         errorId=$_.FullyQualifiedErrorId
         scriptLine=$_.InvocationInfo.ScriptLineNumber
+        nativeErrorCode=if ($base -is [ComponentModel.Win32Exception]) { $base.NativeErrorCode } else { $null }
     }
 } finally {
     $cleanupErrors=[Collections.Generic.List[string]]::new()
