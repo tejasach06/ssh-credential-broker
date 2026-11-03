@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 45
     defaults:
       run:
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -29,6 +29,13 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
       - name: Run native tests
         run: cargo test --locked --workspace --all-targets --target x86_64-pc-windows-msvc
+      - name: Stop image-provided OpenSSH service
+        run: |
+          $service = Get-Service -Name sshd -ErrorAction SilentlyContinue
+          if ($service -and $service.Status -ne 'Stopped') {
+            Stop-Service -Name sshd -Force
+            $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+          }
       - name: Build native release binaries
         run: cargo build --locked --workspace --release --target x86_64-pc-windows-msvc
       - name: Run isolated native SSH smoke
@@ -56,7 +63,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"
     steps:
       - uses: actions/checkout@v5
       - name: Expose installed Git Bash and GNU tools
