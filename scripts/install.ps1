@@ -74,8 +74,9 @@ try {
         $null = New-ItemProperty -LiteralPath $key -Name DumpCount -PropertyType DWord -Value 1
         $null = New-ItemProperty -LiteralPath $key -Name DumpType -PropertyType DWord -Value 1
     }
-    Invoke-BrokerSc @('create', $script:BrokerService, 'binPath=', $image, 'start=', 'disabled', 'DisplayName=', 'SSH credential broker', 'obj=', ('NT SERVICE\' + $script:BrokerService))
+    Invoke-BrokerSc @('create', $script:BrokerService, 'binPath=', $image, 'start=', 'disabled', 'DisplayName=', 'SSH credential broker')
     $createdService = $true
+    Invoke-BrokerSc @('config', $script:BrokerService, 'obj=', ('NT SERVICE\' + $script:BrokerService))
     Invoke-BrokerSc @('sidtype', $script:BrokerService, 'unrestricted')
     Invoke-BrokerSc @('privs', $script:BrokerService, 'SeChangeNotifyPrivilege')
     # Operator can query service state, but cannot replace/start/stop/reconfigure it.
