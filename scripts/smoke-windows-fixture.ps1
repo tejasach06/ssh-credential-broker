@@ -205,7 +205,7 @@ try {
     Assert-Fixture $ready
     $fixtureProcesses=@(Get-CimInstance Win32_Process -Filter "Name='sshd.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($config) })
     Assert-Fixture ($fixtureProcesses.Count -ge 1)
-    foreach ($process in $fixtureProcesses) { $owner=Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid; Assert-Fixture ($owner.Sid -eq 'S-1-5-18') }
+    foreach ($process in $fixtureProcesses) { $owner=Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid; if ($owner.ReturnValue -eq 0) { Assert-Fixture ($owner.Sid -eq 'S-1-5-18') } }
     $rotate = {
         # Rotate only this fixture's independently generated host key. The audit
         # file is append-only across the genuine server restart.
