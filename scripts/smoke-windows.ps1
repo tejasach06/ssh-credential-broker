@@ -135,7 +135,10 @@ function Complete-Role($Entry) {
         Assert-Smoke ($Entry.Process.WaitForExit($Entry.Timeout * 1000)) 'worker_deadline_exceeded'
         $text = $Entry.Out.GetAwaiter().GetResult()
         $errorText = $Entry.Err.GetAwaiter().GetResult()
-        Assert-Smoke ($Entry.Process.ExitCode -eq 0 -and [string]::IsNullOrWhiteSpace($errorText)) 'worker_failed'
+        if ($Entry.Process.ExitCode -ne 0 -or -not [string]::IsNullOrWhiteSpace($errorText)) {
+            $script:workerFailureDetail = @{exitCode=$Entry.Process.ExitCode; err=$errorText; out=$text; role=$Entry.Role}
+            Assert-Smoke $false 'worker_failed'
+        }
         $value = $text | ConvertFrom-Json
         Assert-Smoke ([bool]$value.ok) 'worker_operation_failed'
         if ($value.PSObject.Properties.Name -contains 'actualSid') {
@@ -368,6 +371,7 @@ try {
         errorId=$_.FullyQualifiedErrorId
         scriptLine=$_.InvocationInfo.ScriptLineNumber
         nativeErrorCode=if ($base -is [ComponentModel.Win32Exception]) { $base.NativeErrorCode } else { $null }
+        workerDetail=if ($script:workerFailureDetail) { $script:workerFailureDetail } else { $null }
     }
 } finally {
     $cleanupErrors=[Collections.Generic.List[string]]::new()
