@@ -22,7 +22,8 @@ Existing mode uses supplied separate Windows user credentials and an already
 installed disposable broker. Its grant is intentionally locked/replaced/restarted.
 CreateDisposableAccounts mode requires BinDirectory, installs the real service,
 creates two temporary ordinary local users and removes ONLY those users and its
-own installation in finally. It refuses any existing broker service/install directory.
+own installation in finally. Harness-writable scratch is retained for disposable
+host teardown; elevated cleanup never traverses it. Existing installs are refused.
 Use only on an ephemeral Windows VM such as an elevated hosted windows-2025 runner.
 No existing user or membership is changed. ProvisionLocalSshFixture temporarily
 sets and restores OpenSSH DefaultShell on the explicitly disposable machine.
@@ -173,14 +174,6 @@ function Assert-Error($Result, [string[]] $Codes) {
 }
 function Unlock-Smoke([int] $Ttl=1800) { $null=Invoke-Ctl @('unlock','--ttl-seconds',[string]$Ttl,'--private-json-stdin') $unlockFrame }
 function Approve-Smoke([int] $Budget=16) { $null=Invoke-Ctl @('approve',$EndpointHost,'--port',[string]$Port,'--pinned-ip',$PinnedAddress,'--fingerprint',$HostKeyFingerprint,'--attempt-budget',[string]$Budget) }
-function Remove-SmokeTree([string] $Path) {
-    # Traverse only directories created in this run; never follow a user-created junction.
-    foreach ($item in Get-ChildItem -LiteralPath $Path -Force) {
-        if ($item.PSIsContainer -and -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { Remove-SmokeTree $item.FullName }
-        else { Remove-Item -LiteralPath $item.FullName -Force }
-    }
-    Remove-Item -LiteralPath $Path -Force
-}
 try {
     if (-not ('BrokerWindowsNative' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'windows-native.cs') }
     if ($CreateDisposableAccounts) {
@@ -344,6 +337,7 @@ try {
         Add-Coverage 'real SSH host-key replacement refused before any password submission; independent replacement pin' @{passwordSubmissionDelta=0}
     }
     $currentCheck='real_ttl_expiry_revocation'
+    $null=Invoke-Ctl @('lock')
     Unlock-Smoke 60
     Assert-Error (Invoke-Exec) @('APPROVAL_REQUIRED')
     Approve-Smoke 2
@@ -370,8 +364,10 @@ try {
     }
     if ($null -ne $unlockFrame) { [Array]::Clear($unlockFrame,0,$unlockFrame.Length) }
     $secretPassword=$null
-    if ($work -and (Test-Path -LiteralPath $work)) {
-        try { Remove-SmokeTree $work } catch { $cleanupErrors.Add('managed_scratch_removal_failed') }
+    if ($work) {
+        # The harness can race any path/reparse check within its writable scratch.
+        # Never traverse or delete that tree as administrator, even after logoff.
+        $report.scratchCleanup='retained_for_disposable_host_teardown'
     }
     foreach ($name in $createdUsers) {
         try { Remove-LocalUser -Name $name } catch { $cleanupErrors.Add('disposable_account_removal_failed') }

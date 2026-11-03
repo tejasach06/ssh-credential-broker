@@ -96,17 +96,12 @@ impl DisconnectMonitor for UnixStream {
         // Own the duplicate independently of the stream and its split halves.
         let monitor = unsafe { AsyncFd::register_with_interest(fd, Interest::READABLE) }?;
         Ok(async move {
-            loop {
-                match monitor.readable().await {
-                    Ok(mut readiness) => {
-                        let event = readiness.ready();
-                        if event.is_read_closed() || event.is_error() {
-                            break;
-                        }
-                        readiness.clear_ready();
-                    }
-                    Err(_) => break,
+            while let Ok(mut readiness) = monitor.readable().await {
+                let event = readiness.ready();
+                if event.is_read_closed() || event.is_error() {
+                    break;
                 }
+                readiness.clear_ready();
             }
         })
     }

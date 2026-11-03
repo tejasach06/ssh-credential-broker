@@ -12,4 +12,5 @@
 - Document operator approval, numeric address and host-key pinning, every-login authentication budgets, private credential entry, classified outcomes, accepted remote-shell risks, and verification limits.
 - Add native x64 Windows clients, secured local named pipes, a dedicated virtual SCM service account, administrator-controlled installation and removal, protected console I/O, and inherited-handle preflight.
 - Add disposable native Windows SSH and ConPTY smoke checks, plus an opt-in non-administrator Windows workstation runner check. Preserve native Linux and macOS service-isolation checks alongside trusted VM 101 container builds.
+- Retain harness-writable Windows smoke scratch for disposable-host teardown instead of recursively deleting it with administrator privileges.
 - No absolute memory-erasure or remote-process-cleanup guarantee is made.
