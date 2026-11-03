@@ -81,8 +81,8 @@ try {
     # Operator can query service state, but cannot replace/start/stop/reconfigure it.
     $sddl = 'D:P(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCLORC;;;' + $operatorSid + ')'
     Invoke-BrokerSc @('sdset', $script:BrokerService, $sddl)
-    Set-Service -Name $script:BrokerService -StartupType Automatic
-    Start-Service -Name $script:BrokerService
+    Invoke-BrokerSc @('config', $script:BrokerService, 'start=', 'auto')
+    Invoke-BrokerSc @('start', $script:BrokerService)
     Wait-BrokerServiceState 'Running'
     [ordered]@{ installed=$true; service=$script:BrokerService; root=$script:BrokerRoot; startsLocked=$true; wer='excluded; local dumps denied by managed sink ACL'; privilegeAudit='S4U effective SIDs plus local LSA rights; custom ACL/delegation and future changes require operator audit' } | ConvertTo-Json -Compress
 } catch {
