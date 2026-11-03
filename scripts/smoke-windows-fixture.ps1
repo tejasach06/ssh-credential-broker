@@ -141,6 +141,9 @@ PrintMotd no
 LogLevel DEBUG3
 SyslogFacility LOCAL0
 "@ | Set-Content -LiteralPath $config -Encoding Ascii
+    $stage='validate_real_system_sshd_configuration'
+    $validated=[BrokerWindowsNative]::RunPrivate($sshd,@('-t','-f',$config),[byte[]]@(),$false,30)
+    Assert-Fixture ($validated.ExitCode -eq 0)
     foreach ($property in @('DefaultShell','DefaultShellCommandOption')) {
         $key=if ($shellKeyExisted) { Get-Item -LiteralPath $shellKey } else { $null }
         $exists=$key -and $property -in $key.GetValueNames()
