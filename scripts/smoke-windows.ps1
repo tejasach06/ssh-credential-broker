@@ -175,9 +175,12 @@ function Assert-Error($Result, [string[]] $Codes) {
 function Unlock-Smoke([int] $Ttl=1800) { $null=Invoke-Ctl @('unlock','--ttl-seconds',[string]$Ttl,'--private-json-stdin') $unlockFrame }
 function Approve-Smoke([int] $Budget=16) { $null=Invoke-Ctl @('approve',$EndpointHost,'--port',[string]$Port,'--pinned-ip',$PinnedAddress,'--fingerprint',$HostKeyFingerprint,'--attempt-budget',[string]$Budget) }
 try {
+    $currentCheck='native helper'
     if (-not ('BrokerWindowsNative' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'windows-native.cs') }
     if ($CreateDisposableAccounts) {
+        $currentCheck='managed installation precondition'
         Assert-Smoke (-not (Test-Path -LiteralPath $script:BrokerRoot) -and -not (Get-BrokerServiceRecord)) 'existing_install_refused'
+        $currentCheck='disposable role account creation'
         $random = [Security.Cryptography.RandomNumberGenerator]::Create()
         try {
             $credentials = @()
@@ -196,18 +199,22 @@ try {
         } finally { $random.Dispose() }
         # Mark before invoking install so its recoverable partial state is cleaned too.
         $madeInstall=$true
+        $currentCheck='managed service installation'
         $null=& (Join-Path $PSScriptRoot 'install.ps1') -BinDirectory $BinDirectory -OperatorAccount $OperatorCredential.UserName -HarnessAccount $HarnessCredential.UserName
     }
+    $currentCheck='managed service state'
     $state=Get-BrokerManagedState
     $operatorSid=Assert-BrokerUser $OperatorCredential.UserName
     $harnessSid=Assert-BrokerUser $HarnessCredential.UserName
     Assert-Smoke ($operatorSid -eq $state.OperatorSid -and $harnessSid -eq $state.HarnessSid -and $operatorSid -ne $harnessSid) 'installed_principals_mismatch'
     Assert-BrokerHarness $harnessSid
+    $currentCheck='protected worker staging'
     $work=Join-Path $env:ProgramData ('ssh-broker-smoke-' + [guid]::NewGuid().ToString('N'))
     $null=New-Item -ItemType Directory -Path $work
     Set-BrokerDirectoryAcl $work @($operatorSid,$harnessSid)
     foreach ($name in @('smoke-windows-worker.ps1','windows-native.cs','windows-conpty.cs')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $work $name) }
     $workerPath=Join-Path $work 'smoke-windows-worker.ps1'
+    $currentCheck='role scratch ACLs'
     foreach ($role in @('operator','harness')) {
         $path=Join-Path $work $role; $null=New-Item -ItemType Directory -Path $path
         Set-BrokerDirectoryAcl $path
@@ -216,6 +223,7 @@ try {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid),'Modify','ContainerInherit, ObjectInherit','None','Allow'))
         Set-Acl -LiteralPath $path -AclObject $acl; $roleTemp[$role]=$path
     }
+    $currentCheck='private remote credential preparation'
     $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($RemoteCredential.Password)
     try { $secretPassword=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
