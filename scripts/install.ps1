@@ -74,7 +74,7 @@ try {
         $null = New-ItemProperty -LiteralPath $key -Name DumpCount -PropertyType DWord -Value 1
         $null = New-ItemProperty -LiteralPath $key -Name DumpType -PropertyType DWord -Value 1
     }
-    Invoke-BrokerSc @('create', $script:BrokerService, 'binPath=', $image, 'obj=', ('NT SERVICE\' + $script:BrokerService), 'password=', '', 'start=', 'disabled', 'DisplayName=', 'SSH credential broker')
+    Invoke-BrokerSc @('create', $script:BrokerService, 'binPath=', $image, 'start=', 'disabled', 'DisplayName=', 'SSH credential broker', 'obj=', ('NT SERVICE\' + $script:BrokerService))
     $createdService = $true
     Invoke-BrokerSc @('sidtype', $script:BrokerService, 'unrestricted')
     Invoke-BrokerSc @('privs', $script:BrokerService, 'SeChangeNotifyPrivilege')
