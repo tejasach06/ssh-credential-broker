@@ -3,14 +3,17 @@ use broker_core::{CoreError, StateEngine};
 use broker_proto::{
     read_frame, write_frame, AdminEnvelope, AdminRequest, AdminResponse, ErrorCode, ExecRequest,
 };
+#[cfg(unix)]
 use clap::Parser;
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Semaphore;
 
 #[derive(Parser)]
+#[cfg(unix)]
 struct Options {
     #[arg(long)]
     runtime_dir: PathBuf,
@@ -24,6 +27,7 @@ struct Options {
     admin_gid: u32,
 }
 
+#[cfg(unix)]
 pub async fn run() -> Result<(), &'static str> {
     let options = Options::parse();
     let service_uid = platform::harden()?;
@@ -88,7 +92,11 @@ pub async fn run() -> Result<(), &'static str> {
     Ok(())
 }
 
-async fn serve_admin(mut stream: UnixStream, state: Arc<StateEngine>, configured_uid: u32) {
+pub(crate) async fn serve_admin<S: AsyncRead + AsyncWrite + Unpin>(
+    mut stream: S,
+    state: Arc<StateEngine>,
+    configured_uid: u32,
+) {
     let request = tokio::time::timeout(
         Duration::from_secs(30),
         read_frame::<_, AdminEnvelope>(&mut stream),
@@ -178,12 +186,14 @@ fn admin_error(error: CoreError) -> AdminResponse {
     classify(&error).admin_response()
 }
 
-async fn serve_execution(
-    mut stream: UnixStream,
+pub(crate) async fn serve_execution<S>(
+    mut stream: S,
     state: Arc<StateEngine>,
     uid: u32,
     operations: Arc<Semaphore>,
-) {
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static + platform::DisconnectMonitor,
+{
     let request = tokio::time::timeout(
         Duration::from_secs(10),
         read_frame::<_, ExecRequest>(&mut stream),
@@ -207,7 +217,11 @@ async fn serve_execution(
             return;
         }
     };
-    let (reader, mut writer) = stream.into_split();
+    let Ok(disconnect) = stream.disconnect_monitor() else {
+        send_error(&mut stream, ErrorCode::LocalIo).await;
+        return;
+    };
+    let (reader, mut writer) = tokio::io::split(stream);
     let (responses, mut outgoing) = tokio::sync::mpsc::channel::<broker_proto::ExecResponse>(8);
     // This task alone owns framing. Revocation cancels SSH work, never a partial
     // frame followed by another frame on the same byte stream.
@@ -224,7 +238,7 @@ async fn serve_execution(
             Err(transport::Failure(code))
         },
         _ = &mut output => return,
-        outcome = transport::execute(&state, &token, request, reader, &responses) => outcome,
+        outcome = transport::execute(&state, &token, request, reader, &responses, disconnect) => outcome,
     };
     let failed = result.is_err();
     if let Err(error) = result {
@@ -250,7 +264,7 @@ async fn serve_execution(
     }
 }
 
-async fn send_error(stream: &mut UnixStream, code: ErrorCode) {
+async fn send_error<S: AsyncWrite + Unpin>(stream: &mut S, code: ErrorCode) {
     let _ = tokio::time::timeout(
         Duration::from_secs(5),
         write_frame(stream, &code.exec_response()),

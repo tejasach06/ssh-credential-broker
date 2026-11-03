@@ -211,10 +211,20 @@ name = "broker-ssh"
 version = "0.1.0"
 dependencies = [
  "broker-proto",
+ "broker-windows",
  "clap",
  "libc",
  "serde_json",
  "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "broker-windows"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -222,10 +232,12 @@ name = "brokerctl"
 version = "0.1.0"
 dependencies = [
  "broker-proto",
+ "broker-windows",
  "clap",
  "libc",
  "serde_json",
  "tokio",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
@@ -235,12 +247,14 @@ version = "0.1.0"
 dependencies = [
  "broker-core",
  "broker-proto",
+ "broker-windows",
  "bytes",
  "clap",
  "futures-util",
  "libc",
  "russh",
  "tokio",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

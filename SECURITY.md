@@ -20,6 +20,18 @@ Linux uses systemd `User=sshbroker`, a dedicated primary group, both supplementa
 
 The broker needs outbound SSH network access. Service installation does not weaken SSH server configuration, install client keys, disable operating-system protections, or grant the harness administrator rights. Socket group assignment does not require root because the broker belongs to both dedicated socket groups.
 
+## Native Windows boundary
+
+The Service Control Manager runs the daemon as `NT SERVICE\ssh-brokerd`, separately from the configured operator and harness user SIDs. Administrator-controlled installation paths, service permissions, and process and token DACLs prevent harness service replacement, memory reads, debugger access, or token duplication. Limited identity-query access permits clients to authenticate the pipe server without granting those other rights. Administrators and SYSTEM remain trusted.
+
+Execution and administration use separate local-only named pipes. Their protected DACLs admit the intended caller without granting pipe-instance creation. Each server authorizes the connected client's token user, and each client verifies the server process's service identity. The daemon requires its SCM identity and rejects privileged harness tokens. Credential input remains local to the trusted operator and is sent only after server authentication.
+
+The Windows installer requires existing, distinct user accounts. It checks effective group membership, including nested and deny-only membership, plus local LSA privilege assignments. These checks do not audit arbitrary delegated ACLs, domain rules, third-party elevation mechanisms, or future policy changes. Installation refuses untracked service or directory collisions and existing application-specific crash-report settings. Uninstallation checks ownership records and preserves unrelated users, groups, service configuration, and crash policy.
+
+Windows Error Reporting exclusions and a deny-write LocalDumps directory reduce application dump exposure. They are basename-scoped policy changes, not an absolute erasure guarantee. Paging, hibernation, kernel dumps, privileged external tools, and prior dumps remain outside that protection.
+
+Before remote work starts, the Windows client validates an inherited outcome handle's object type and granted write access. A read-only file or non-I/O handle must fail without authentication or remote command execution.
+
 ## Credential and destination lifetime
 
 The credential pool exists only in memory. Passwords and usernames are not accepted as command-line options or environment variables. The operator uses hidden terminal prompts or an explicitly private framed input stream. There is no persistent vault, keychain integration, credential file format, or restart recovery.

@@ -7,13 +7,11 @@ use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh::{client, Channel, ChannelMsg};
 use std::future::{poll_fn, Future};
 use std::net::{IpAddr, Shutdown, SocketAddr};
-use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use std::time::Duration;
-use tokio::io::{unix::AsyncFd, Interest};
-use tokio::net::unix::OwnedReadHalf;
+use tokio::io::AsyncRead;
 use tokio::sync::{mpsc, watch};
 
 pub struct Failure(pub ErrorCode);
@@ -194,46 +192,26 @@ impl Drop for InputTask {
     }
 }
 
-pub async fn execute(
+pub async fn execute<R, D>(
     state: &Arc<StateEngine>,
     token: &GrantToken,
     request: ExecRequest,
-    reader: OwnedReadHalf,
+    reader: R,
     responses: &mpsc::Sender<ExecResponse>,
-) -> Result<(), Failure> {
+    disconnect: D,
+) -> Result<(), Failure>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    D: Future<Output = ()> + Send + 'static,
+{
     let (tx, mut input) = mpsc::channel(8);
     let ready = Arc::new(AtomicBool::new(false));
     let input_ready = ready.clone();
     let (disconnected, mut disconnect_rx) = watch::channel(None);
     let monitor_disconnected = disconnected.clone();
-    let fd = reader
-        .as_ref()
-        .as_fd()
-        .try_clone_to_owned()
-        .map_err(network)?;
-    // SAFETY: AsyncFd owns this duplicated OwnedFd. Its descriptor remains open
-    // and unchanged until AsyncFd deregisters and drops it, independently of reader.
-    let monitor =
-        unsafe { AsyncFd::register_with_interest(fd, Interest::READABLE) }.map_err(network)?;
     let _disconnect_task = InputTask(tokio::spawn(async move {
-        loop {
-            match monitor.readable().await {
-                Ok(mut readiness) => {
-                    let event = readiness.ready();
-                    if event.is_read_closed() || event.is_error() {
-                        let _ = monitor_disconnected.send(Some(ErrorCode::Cancelled));
-                        break;
-                    }
-                    // Ordinary data belongs to the input task. Clear this edge
-                    // without reading or spinning while its bounded queue is full.
-                    readiness.clear_ready();
-                }
-                Err(_) => {
-                    let _ = monitor_disconnected.send(Some(ErrorCode::Cancelled));
-                    break;
-                }
-            }
-        }
+        disconnect.await;
+        let _ = monitor_disconnected.send(Some(ErrorCode::Cancelled));
     }));
     let _input_task = InputTask(tokio::spawn(async move {
         let mut reader = reader;

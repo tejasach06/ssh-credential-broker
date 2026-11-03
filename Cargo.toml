@@ -6,6 +6,7 @@ members = [
     "crates/brokerd",
     "crates/broker-ssh",
     "crates/brokerctl",
+    "crates/broker-windows",
 ]
 
 [workspace.package]

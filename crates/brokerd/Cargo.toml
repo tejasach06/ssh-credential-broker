@@ -18,3 +18,7 @@ libc.workspace = true
 zeroize.workspace = true
 futures-util.workspace = true
 bytes.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+broker-windows = { path = "../broker-windows" }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Services"] }

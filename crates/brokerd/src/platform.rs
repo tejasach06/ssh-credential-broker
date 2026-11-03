@@ -1,4 +1,5 @@
 use std::fs;
+use std::future::Future;
 use std::io;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -80,5 +81,33 @@ impl Drop for SocketCleanup {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
         let _ = fs::remove_file(&self.1);
+    }
+}
+
+pub trait DisconnectMonitor {
+    fn disconnect_monitor(&self) -> io::Result<impl Future<Output = ()> + Send + 'static>;
+}
+
+impl DisconnectMonitor for UnixStream {
+    fn disconnect_monitor(&self) -> io::Result<impl Future<Output = ()> + Send + 'static> {
+        use std::os::fd::AsFd;
+        use tokio::io::{unix::AsyncFd, Interest};
+        let fd = self.as_fd().try_clone_to_owned()?;
+        // Own the duplicate independently of the stream and its split halves.
+        let monitor = unsafe { AsyncFd::register_with_interest(fd, Interest::READABLE) }?;
+        Ok(async move {
+            loop {
+                match monitor.readable().await {
+                    Ok(mut readiness) => {
+                        let event = readiness.ready();
+                        if event.is_read_closed() || event.is_error() {
+                            break;
+                        }
+                        readiness.clear_ready();
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
     }
 }

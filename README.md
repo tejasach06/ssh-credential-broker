@@ -4,9 +4,9 @@ A password-only SSH broker for an untrusted local automation harness. The truste
 
 The public requirements and acceptance scenarios are in [GitHub issue #1](https://github.com/tejasach06/ssh-credential-broker/issues/1). Read [SECURITY.md](SECURITY.md) before deployment. Full remote shell access exposes the remote username and can expose remote secrets or create persistent access. This is not a command sandbox.
 
-Linux with systemd and macOS with launchd are the initial deployment targets. Windows service installation and execution are unsupported. Native CI is configured, but a workflow definition is not a successful platform test. See [Verification limits](#verification-limits).
+Linux uses systemd, macOS uses launchd, and native Windows uses the Service Control Manager and secured local named pipes. A workflow definition or cross-compiled executable does not establish a platform pass. See [Verification limits](#verification-limits).
 
-## Install verified release binaries
+## Install verified release binaries on Linux or macOS
 
 Use an administrator-controlled terminal, not the harness session. The harness must have its own unprivileged local account, with no sudo, administrator, debugger, broker-account, or service-management access. The operator uses a different UID. A root operator is allowed. A root harness is rejected.
 
@@ -48,6 +48,33 @@ sudo launchctl kickstart -k system/com.ssh-credential-broker.daemon
 ```
 
 Restart, reinstall, and upgrade revoke the current grant. Credentials and approvals must be entered again.
+
+## Install on Windows
+
+Use an elevated, native 64-bit PowerShell terminal outside the harness. The operator and harness must be separate existing user accounts. The harness must not have administrator membership, elevated local privileges, service-management access, or control of the installed binaries. The installer checks effective group membership through S4U and local LSA rights. Custom delegation and future policy changes still require an operator audit.
+
+Extract the Windows archive and keep its `bin/` and `scripts/` directories together. From the extracted release root, install with the intended account names:
+
+```powershell
+.\scripts\install.ps1 -BinDirectory .\bin `
+	-OperatorAccount '.\trusted-operator' -HarnessAccount '.\automation'
+Get-Service ssh-brokerd
+```
+
+The service runs as the dedicated virtual account `NT SERVICE\ssh-brokerd`. Binaries and an identity-only installation record are protected under `$env:ProgramFiles\ssh-credential-broker`. Separate, local-only named pipes authorize the exact configured operator and harness SIDs. Clients verify the server service identity before sending requests. There is no caller-selectable pipe endpoint.
+
+From the configured operator's terminal, use the installed clients:
+
+```powershell
+& "$env:ProgramFiles\ssh-credential-broker\brokerctl.exe" unlock --credential-count 2 --ttl-seconds 1800
+& "$env:ProgramFiles\ssh-credential-broker\brokerctl.exe" status
+```
+
+Windows fixes the harness SID at installation, so `unlock` has no `--harness-uid` option. Hidden prompts are the normal credential input. `--private-json-stdin` accepts a private inherited pipe from the same operator, not an arbitrary credential file. `broker-ssh.exe` uses `--outcome-handle` for an inherited writable Windows handle instead of a Unix descriptor.
+
+`Restart-Service ssh-brokerd` revokes access and restarts locked. To remove the installation, run `.\scripts\uninstall.ps1` elevated from the matching release. Removal preserves operator and harness accounts and memberships. Reinstallation requires removal first.
+
+The installer excludes the three executable basenames from Windows Error Reporting and redirects application-specific LocalDumps to a protected deny-write directory. Existing application-specific settings cause refusal. Removal restores only the installer's settings. This does not prevent paging, hibernation, kernel dumps, external privileged dump tools, or administrator changes.
 
 ## Unlock from the trusted operator session
 

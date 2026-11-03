@@ -1,8 +1,9 @@
-#[cfg(unix)]
 mod daemon;
 #[cfg(unix)]
 mod platform;
-#[cfg(unix)]
+#[cfg(windows)]
+#[path = "windows.rs"]
+mod platform;
 mod transport;
 
 #[cfg(unix)]
@@ -14,8 +15,16 @@ async fn main() {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn main() {
-    eprintln!("ssh-brokerd requires Linux or macOS; Windows service isolation is not supported");
+    if let Err(message) = platform::run_service() {
+        eprintln!("ssh-brokerd: {message}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn main() {
+    eprintln!("ssh-brokerd: unsupported platform");
     std::process::exit(1);
 }
