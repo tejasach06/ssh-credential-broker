@@ -12,8 +12,9 @@ try {
     $header = [byte[]]::new(4)
     $offset = 0
     while ($offset -lt 4) { $count = $stream.Read($header, $offset, 4 - $offset); if ($count -eq 0) { throw 'Missing request frame.' }; $offset += $count }
-    $length = ([uint32]$header[0] -shl 24) -bor ([uint32]$header[1] -shl 16) -bor ([uint32]$header[2] -shl 8) -bor [uint32]$header[3]
-    if ($length -eq 0 -or $length -gt 16MB) { throw 'Request size outside smoke limits.' }
+    [Array]::Reverse($header)
+    $length = [BitConverter]::ToUInt32($header, 0)
+    if ($length -eq 0 -or $length -gt 16777216) { throw "Request size outside smoke limits: $length" }
     $buffer = [byte[]]::new($length)
     try {
         $offset = 0
