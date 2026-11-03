@@ -359,7 +359,13 @@ try {
     $report.result='passed'
 } catch {
     # No raw exception, CLI output, endpoint login, or credential enters diagnostics.
-    $report.failure=[ordered]@{check=$currentCheck; code='native_windows_smoke_failed'}
+    $report.failure=[ordered]@{
+        check=$currentCheck
+        code='native_windows_smoke_failed'
+        exceptionType=$_.Exception.GetType().FullName
+        errorId=$_.FullyQualifiedErrorId
+        scriptLine=$_.InvocationInfo.ScriptLineNumber
+    }
 } finally {
     $cleanupErrors=[Collections.Generic.List[string]]::new()
     foreach ($entry in @($active.ToArray())) {
