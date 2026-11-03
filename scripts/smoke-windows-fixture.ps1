@@ -230,6 +230,15 @@ try {
     $result='passed'
 } catch {
     $failure=[ordered]@{exceptionType=$_.Exception.GetType().FullName;scriptLine=$_.InvocationInfo.ScriptLineNumber}
+    if ($taskRegistered) {
+        try { $failure.taskResult=(Get-ScheduledTaskInfo -TaskName $task).LastTaskResult } catch {}
+    }
+    if ($log -and (Test-Path -LiteralPath $log -PathType Leaf)) {
+        try {
+            $logText=[IO.File]::ReadAllText($log)
+            $failure.sshdDiagnostic=if ($logText -match '(?i)bad ownership|bad permissions') {'file_permissions'} elseif ($logText -match '(?i)bind.*failed|address already in use') {'listener_bind'} elseif ($logText -match '(?i)no hostkeys available|could not load host key') {'host_key'} elseif ($logText -match '(?i)privilege separation') {'privilege_separation'} else {'unclassified'}
+        } catch {}
+    }
     $result='failed'
 } finally {
     if ($taskRegistered) {
