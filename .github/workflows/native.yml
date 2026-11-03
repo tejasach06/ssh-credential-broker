@@ -1,14 +1,13 @@
-name: Native Linux and macOS
+name: VM101 container builds
 on:
   push:
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   vm101:
-    name: VM 101 container build
-    if: github.event_name != 'pull_request'
+    name: Linux build and Windows GNU cross-compile
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, Linux, X64, vm101, podman]
     concurrency:
       group: vm101-broker-build
@@ -19,67 +18,40 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check warnings
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Run tests
-        run: cargo test --workspace --all-targets
-      - name: Build native Linux release binaries
-        run: cargo build --workspace --release --bins
-      - name: Build Windows release binaries
-        run: cargo build --workspace --release --bins --target x86_64-pc-windows-gnu
-      - name: Package Windows installation
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Run Linux tests
+        run: cargo test --locked --workspace --all-targets
+      - name: Build Linux release binaries
+        run: cargo build --locked --workspace --release --bins
+      - name: Cross-compile Windows GNU release binaries
+        run: cargo build --locked --workspace --release --bins --target x86_64-pc-windows-gnu
+      - name: Package Linux installation
+        run: |
+          mkdir -p release/linux/bin
+          cp target/release/ssh-brokerd target/release/broker-ssh target/release/brokerctl release/linux/bin/
+          cp -R scripts deploy README.md SECURITY.md CHANGELOG.md release/linux/
+          tar -czf release/ssh-credential-broker-Linux-x86_64.tar.gz -C release/linux .
+          cd release && sha256sum ssh-credential-broker-Linux-x86_64.tar.gz > SHA256SUMS-linux.txt
+      - name: Package Windows GNU installation
         run: |
           mkdir -p release/windows/bin
           cp target/x86_64-pc-windows-gnu/release/ssh-brokerd.exe target/x86_64-pc-windows-gnu/release/broker-ssh.exe target/x86_64-pc-windows-gnu/release/brokerctl.exe release/windows/bin/
-          cp -r scripts deploy README.md SECURITY.md CHANGELOG.md release/windows/
-          tar -czf release/ssh-credential-broker-Windows-x86_64.tar.gz -C release/windows .
-          cd release && sha256sum ssh-credential-broker-Windows-x86_64.tar.gz > SHA256SUMS-windows.txt
-      - uses: actions/upload-artifact@v7
+          cp -R scripts deploy README.md SECURITY.md CHANGELOG.md release/windows/
+          tar -czf release/ssh-credential-broker-Windows-x86_64-gnu.tar.gz -C release/windows .
+          cd release && sha256sum ssh-credential-broker-Windows-x86_64-gnu.tar.gz > SHA256SUMS-windows.txt
+      - name: Upload Linux archive and checksum
+        uses: actions/upload-artifact@v7
         with:
-          name: release-Windows-x86_64-vm101
-          path: release/ssh-credential-broker-Windows-x86_64.tar.gz
-          if-no-files-found: error
-
-  native:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-14]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Install Linux smoke dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes openssh-server
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Check warnings
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Run tests
-        run: cargo test --workspace --all-targets
-      - name: Build native release binaries
-        run: cargo build --workspace --release --bins
-      - name: Run isolated native SSH smoke
-        run: sudo python3 scripts/smoke.py --bin-dir target/release
-      - name: Package native installation
-        shell: bash
-        run: |
-          mkdir -p release/package/bin
-          cp target/release/ssh-brokerd target/release/broker-ssh target/release/brokerctl release/package/bin/
-          cp -R scripts deploy README.md SECURITY.md CHANGELOG.md release/package/
-          tar -czf "release/ssh-credential-broker-$(uname -s)-$(uname -m).tar.gz" -C release/package .
-          if [ "$(uname -s)" = Darwin ]; then
-            shasum -a 256 release/*.tar.gz > release/SHA256SUMS
-          else
-            sha256sum release/*.tar.gz > release/SHA256SUMS
-          fi
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-${{ runner.os }}-${{ runner.arch }}
+          name: release-Linux-x86_64-vm101
           path: |
-            release/*.tar.gz
-            release/SHA256SUMS
+            release/ssh-credential-broker-Linux-x86_64.tar.gz
+            release/SHA256SUMS-linux.txt
+          if-no-files-found: error
+      - name: Upload Windows GNU archive and checksum
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-Windows-x86_64-gnu-vm101
+          path: |
+            release/ssh-credential-broker-Windows-x86_64-gnu.tar.gz
+            release/SHA256SUMS-windows.txt
           if-no-files-found: error

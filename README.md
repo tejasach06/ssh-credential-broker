@@ -6,9 +6,11 @@ The public requirements and acceptance scenarios are in [GitHub issue #1](https:
 
 Linux uses systemd, macOS uses launchd, and native Windows uses the Service Control Manager and secured local named pipes. A workflow definition or cross-compiled executable does not establish a platform pass. See [Verification limits](#verification-limits).
 
-## Install verified release binaries on Linux or macOS
+## Install on Linux or macOS
 
 Use an administrator-controlled terminal, not the harness session. The harness must have its own unprivileged local account, with no sudo, administrator, debugger, broker-account, or service-management access. The operator uses a different UID. A root operator is allowed. A root harness is rejected.
+
+The current CI produces a Linux archive, but no macOS archive. CI artifacts are build outputs, not a verified release. Native service-isolation evidence is separate from container checks.
 
 The installer rejects known privileged group memberships, including `root`, `sudo`, `wheel`, `admin`, `docker`, `lxd`, `incus`, `libvirt`, and the broker service and administration groups. This does not verify arbitrary sudoers rules or every privilege path. Audit the harness's effective sudo access, VM and container engine control, debugger rights, and service-management permissions before installation.
 
@@ -50,6 +52,8 @@ sudo launchctl kickstart -k system/com.ssh-credential-broker.daemon
 Restart, reinstall, and upgrade revoke the current grant. Credentials and approvals must be entered again.
 
 ## Install on Windows
+
+The current Windows GNU archive is cross-compiled on Linux. It has no native Windows runtime verification from the current CI. These installation instructions do not establish a supported Windows release.
 
 Use an elevated, native 64-bit PowerShell terminal outside the harness. The operator and harness must be separate existing user accounts. The harness must not have administrator membership, elevated local privileges, service-management access, or control of the installed binaries. The installer checks effective group membership through S4U and local LSA rights. Custom delegation and future policy changes still require an operator audit.
 
@@ -207,13 +211,23 @@ Service metadata may include destination names, IPs, fingerprints, and timing. T
 
 ## Verification limits
 
-Trusted pushes and manual runs also build and test on the VM 101 rootless Podman runner with labels `self-hosted`, `Linux`, `X64`, `vm101`, and `podman`. Pull requests never execute on that homelab runner. Disposable GitHub-hosted Linux and macOS runners retain the native service-isolation smoke checks. The VM 101 container has no systemd instance and does not replace those checks.
+### Current container checks
 
-The native workflow runs formatting, clippy, unit and integration tests, release builds, and `sudo python3 scripts/smoke.py --bin-dir target/release` on Linux and macOS runners. The smoke uses a disposable loopback SSH server, generated fixture credentials, a root operator, and a distinct unprivileged harness. It refuses an existing tracked installation. It temporarily appends a unique `.invalid` hostname to `/etc/hosts`, changes its address, and restores the exact original file bytes in a `finally` block. Run it only on a disposable native host, not a workstation with a production broker.
+The only workflow, `.github/workflows/native.yml`, runs on the VM 101 rootless Podman runner with labels `self-hosted`, `Linux`, `X64`, `vm101`, and `podman`. Repository pushes and manual runs can use trusted feature branches. Pull request events do not trigger the workflow. No jobs use GitHub-hosted runners or the local Windows workstation.
 
-The Windows workflow builds and tests with MSVC on `windows-2025`. Its elevated smoke requires a disposable VM and provisions a real loopback OpenSSH fixture. It changes and restores the fixture's shell settings, checks actual password-attempt counts, tests service and process isolation, and exercises ConPTY input, resizing, and interruption. Harness-writable scratch is retained for host teardown rather than recursively removed as administrator. Do not run this fixture on a workstation. The opt-in `verify_workstation` workflow input runs only GNU client builds, tests, and CLI checks on the non-administrator workstation runner. It requires the installed Git Bash and `C:/mingw64/bin` tools and does not install broker services.
+The workflow runs formatting, clippy, and workspace tests on Linux. Cargo checks, tests, and release builds use `--locked`. It packages the Linux binaries and cross-compiles `x86_64-pc-windows-gnu` binaries with `mingw-w64`. Each uploaded artifact includes its archive and a SHA-256 manifest, `SHA256SUMS-linux.txt` or `SHA256SUMS-windows.txt`. Check each manifest from the directory containing its archive with `sha256sum -c SHA256SUMS-linux.txt` or `sha256sum -c SHA256SUMS-windows.txt`. A matching checksum detects corruption, but does not establish trusted provenance or runtime correctness.
 
-The script reports the identities and behavior that it observes. It provides partial acceptance coverage, not a complete A01-A31 security audit. [GitHub Actions run 41521871110](https://github.com/tejasach06/ssh-credential-broker/actions/runs/41521871110) passed the native smoke on Ubuntu 24.04 and macOS 14. The Linux run used operator UID 0, harness UID 1002, and broker UID 999. The macOS run used operator UID 0, harness UID 510, and broker UID 450. Both runs exercised every scenario listed below. Cross-compilation, mocked tests, and Linux containers do not establish macOS isolation. Suspend behavior, native operating-system clock manipulation, and all remaining issue acceptance scenarios still need evidence before a complete release claim.
+The VM 101 container has no systemd instance and does not run native service-isolation smoke checks. Windows binaries are not executed by this workflow. Cross-compilation does not verify Windows SCM, named-pipe ACLs, account isolation, OpenSSH integration, or ConPTY behavior. The workflow produces no macOS artifact and establishes no macOS runtime evidence.
+
+### Historical native smoke evidence
+
+[GitHub Actions run 41521871110](https://github.com/tejasach06/ssh-credential-broker/actions/runs/41521871110) passed the native smoke on Ubuntu 24.04 and macOS 14 before the container-only cutover. The Linux run used operator UID 0, harness UID 1002, and broker UID 999. The macOS run used operator UID 0, harness UID 510, and broker UID 450. This is historical evidence for that run's revision, not a pass for the current tree or future changes.
+
+The retained `scripts/smoke.py` uses a disposable loopback SSH server, generated fixture credentials, a root operator, and a distinct unprivileged harness. It refuses an existing tracked installation. It temporarily changes `/etc/hosts` and restores the original bytes in a `finally` block. The retained Windows smoke script provisions a loopback OpenSSH fixture and checks Windows service isolation and ConPTY behavior. Neither script runs in the current workflow. They require a disposable native host and must not run on a workstation with a production broker.
+
+Smoke reports provide partial acceptance coverage, not a complete A01-A31 security audit. No native Windows pass is claimed here. Cross-compilation, mocked tests, and Linux containers do not establish native Windows or macOS isolation. Suspend behavior, native operating-system clock manipulation, and the remaining issue acceptance scenarios still need evidence before a complete release claim.
+
+### Retained native smoke coverage
 
 The smoke also exercises invalid and read-only outcome descriptors before authentication, outcome-write failure, custom remote signals, and 35 seconds of established stdin backpressure while large output drains. Native resolver input changes after approval must not change the pinned SSH endpoint, and a hostname alias must not reset its shared authentication budget. A deliberately stalled SSH-identification peer receives no server credentials. Sending `Connect`, nine `StdinData` frames, and `Cancel` before `SessionReady` must produce prompt protocol rejection instead of waiting for the 30-second handshake timeout. A separate malformed SSH peer supplies a synthetic secret-like banner to verify classified diagnostics without raw banner disclosure. Neither peer simulates successful SSH.
 
