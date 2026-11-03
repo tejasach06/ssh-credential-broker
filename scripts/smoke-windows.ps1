@@ -189,7 +189,7 @@ try {
                 $bytes=[byte[]]::new(36); $random.GetBytes($bytes)
                 $secure=ConvertTo-SecureString ('aA1!' + [Convert]::ToBase64String($bytes)) -AsPlainText -Force
                 [Array]::Clear($bytes,0,$bytes.Length)
-                $localUser=New-LocalUser -Name $name -Password $secure -Description 'Disposable ssh-credential-broker acceptance fixture' -AccountNeverExpires
+                $localUser=New-LocalUser -Name $name -Password $secure -Description 'Disposable broker role fixture' -AccountNeverExpires
                 $createdUsers.Add($name)
                 # New-LocalUser does not guarantee membership in Users; add only the new account.
                 if (@(Get-LocalGroupMember -SID 'S-1-5-32-545' | Where-Object { $_.SID -eq $localUser.SID }).Count -eq 0) { Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $localUser }
