@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Upgrade `actions/upload-artifact` to v7, which uses Node.js 24 and removes the deprecated Node.js 20 action runtime.
 - Add the memory-only password SSH broker, harness client, and trusted operator client described by [issue #1](https://github.com/tejasach06/ssh-credential-broker/issues/1).
 - Add dedicated-user systemd and launchd deployment, separate execution and administration socket groups, root-owned installed binaries, and explicit account-purge removal.
 - Add Linux and macOS native CI with real loopback SSH smoke scenarios and generated fixture credentials. Configured checks are not recorded platform passes.
