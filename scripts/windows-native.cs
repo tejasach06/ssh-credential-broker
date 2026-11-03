@@ -33,7 +33,7 @@ public static class BrokerWindowsNative {
         try {
             Check(AuthzInitializeResourceManager(1, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, "ssh-broker-installer", out manager));
             // Never silently fall back to incomplete directory-only group enumeration.
-            Check(AuthzInitializeContextFromSid(4, SidBytes(user), manager, IntPtr.Zero, new Luid(), IntPtr.Zero, out context));
+            Check(AuthzInitializeContextFromSid(0, SidBytes(user), manager, IntPtr.Zero, new Luid(), IntPtr.Zero, out context));
             uint needed; AuthzGetInformationFromContext(context, 2, 0, out needed, IntPtr.Zero);
             if (needed == 0) throw new InvalidOperationException("S4U group information unavailable");
             buffer=Marshal.AllocHGlobal(checked((int)needed));
