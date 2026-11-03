@@ -13,6 +13,12 @@ use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
 #[derive(Parser)]
 #[command(version, about = "Execute through the isolated SSH credential broker")]
 struct Args {
+    /// Connect to a custom execution named pipe
+    #[arg(long)]
+    pipe: Option<String>,
+    /// Connect to the default standalone execution named pipe
+    #[arg(long)]
+    standalone: bool,
     target: String,
     #[arg(long, default_value_t = 22)]
     port: u16,
@@ -120,13 +126,18 @@ async fn execute(args: &Args) -> Result<Outcome, ErrorCode> {
             }),
         };
         request.validate().map_err(|_| ErrorCode::InputError)?;
-        let pipe = tokio::time::timeout(
-            Duration::from_secs(30),
-            broker_windows::connect(broker_windows::EXEC_PIPE),
-        )
-        .await
-        .map_err(|_| ErrorCode::TransportFailure)?
-        .map_err(|_| ErrorCode::TransportFailure)?;
+        let pipe_name = if let Some(pipe) = &args.pipe {
+            pipe.as_str()
+        } else if args.standalone {
+            broker_windows::STANDALONE_EXEC_PIPE
+        } else {
+            broker_windows::EXEC_PIPE
+        };
+        let pipe =
+            tokio::time::timeout(Duration::from_secs(30), broker_windows::connect(pipe_name))
+                .await
+                .map_err(|_| ErrorCode::TransportFailure)?
+                .map_err(|_| ErrorCode::TransportFailure)?;
         let (mut reader, mut writer) = tokio::io::split(pipe);
         tokio::time::timeout(Duration::from_secs(30), send(&mut writer, &request))
             .await
@@ -282,5 +293,18 @@ mod tests {
         assert_eq!(remote_signal("SIGINT"), 2);
         assert_eq!(remote_signal("TERM"), 15);
         assert_eq!(remote_signal("unknown"), 0);
+    }
+    #[test]
+    fn native_cli_accepts_standalone_and_custom_pipe() {
+        let args = Args::try_parse_from(["broker-ssh", "--standalone", "host.example"]).unwrap();
+        assert!(args.standalone);
+        let args = Args::try_parse_from([
+            "broker-ssh",
+            "--pipe",
+            r"\\.\pipe\custom-exec",
+            "host.example",
+        ])
+        .unwrap();
+        assert_eq!(args.pipe.as_deref(), Some(r"\\.\pipe\custom-exec"));
     }
 }

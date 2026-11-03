@@ -32,6 +32,20 @@ struct Options {
     harness_sid: String,
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about = "SSH credential broker daemon")]
+pub struct StandaloneOptions {
+    /// Run in standalone / user-space foreground mode instead of Windows service
+    #[arg(long)]
+    pub standalone: bool,
+    /// Named pipe path for operator administration
+    #[arg(long, default_value = broker_windows::STANDALONE_ADMIN_PIPE)]
+    pub admin_pipe: String,
+    /// Named pipe path for harness execution
+    #[arg(long, default_value = broker_windows::STANDALONE_EXEC_PIPE)]
+    pub exec_pipe: String,
+}
+
 static STATUS: AtomicUsize = AtomicUsize::new(0);
 static STOP: OnceLock<watch::Sender<bool>> = OnceLock::new();
 
@@ -206,4 +220,84 @@ async fn run(options: Options, mut stop: watch::Receiver<bool>) -> Result<(), &'
     }
     state.lock();
     Ok(())
+}
+
+pub fn run_standalone(options: StandaloneOptions) -> Result<(), &'static str> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "cannot start standalone runtime")?;
+    runtime.block_on(async move {
+        let StandaloneOptions {
+            admin_pipe,
+            exec_pipe,
+            ..
+        } = options;
+        let current_user: Arc<str> = broker_windows::current_user_sid()
+            .map_err(|_| "cannot determine current user SID")?
+            .into();
+
+        let exec_security =
+            broker_windows::Listener::new(exec_pipe, current_user.as_ref(), current_user.as_ref())
+                .map_err(|_| "cannot secure execution pipe")?;
+        let admin_security =
+            broker_windows::Listener::new(admin_pipe, current_user.as_ref(), current_user.as_ref())
+                .map_err(|_| "cannot secure administration pipe")?;
+
+        let mut execution = exec_security
+            .create(true)
+            .map_err(|_| "cannot create execution pipe")?;
+        let mut administration = admin_security
+            .create(true)
+            .map_err(|_| "cannot create administration pipe")?;
+
+        let state = Arc::new(StateEngine::new(32));
+        let exec_slots = Arc::new(Semaphore::new(64));
+        let admin_slots = Arc::new(Semaphore::new(4));
+        let operations = Arc::new(Semaphore::new(32));
+
+        let mut interrupt =
+            tokio::signal::windows::ctrl_c().map_err(|_| "cannot register ctrl+c")?;
+        let mut ctrl_break =
+            tokio::signal::windows::ctrl_break().map_err(|_| "cannot register ctrl+break")?;
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = interrupt.recv() => break,
+                _ = ctrl_break.recv() => break,
+                incoming = execution.connect() => {
+                    incoming.map_err(|_| "execution pipe failed")?;
+                    let next = exec_security.create(false).map_err(|_| "cannot replace execution pipe")?;
+                    let mut stream = std::mem::replace(&mut execution, next);
+                    let Ok(slot) = exec_slots.clone().try_acquire_owned() else { continue; };
+                    let state = state.clone();
+                    let operations = operations.clone();
+                    let expected = current_user.clone();
+                    tokio::spawn(async move {
+                        let _slot = slot;
+                        if broker_windows::accept_identity_options(&mut stream, &expected, false).await.is_ok() {
+                            daemon::serve_execution(stream, state, 1, operations).await;
+                        }
+                    });
+                }
+                incoming = administration.connect() => {
+                    incoming.map_err(|_| "administration pipe failed")?;
+                    let next = admin_security.create(false).map_err(|_| "cannot replace administration pipe")?;
+                    let mut stream = std::mem::replace(&mut administration, next);
+                    let Ok(slot) = admin_slots.clone().try_acquire_owned() else { continue; };
+                    let state = state.clone();
+                    let expected = current_user.clone();
+                    tokio::spawn(async move {
+                        let _slot = slot;
+                        if broker_windows::accept_identity_options(&mut stream, &expected, false).await.is_ok() {
+                            daemon::serve_admin(stream, state, 1).await;
+                        }
+                    });
+                }
+            }
+        }
+        state.lock();
+        Ok(())
+    })
 }

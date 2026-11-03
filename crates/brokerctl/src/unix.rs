@@ -19,8 +19,10 @@ use unix_input::{private_input, Prompt};
     about = "Trusted operator administration for the SSH credential broker"
 )]
 struct Args {
-    #[arg(long, default_value = default_socket(), global = true)]
-    admin_socket: PathBuf,
+    #[arg(long, global = true)]
+    admin_socket: Option<PathBuf>,
+    #[arg(long, global = true)]
+    standalone: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -74,11 +76,20 @@ enum Command {
     },
 }
 
-fn default_socket() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "/private/var/db/ssh-credential-broker/run/admin.sock"
+fn default_socket(standalone: bool) -> PathBuf {
+    if standalone {
+        if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
+            PathBuf::from(runtime).join("ssh-credential-broker/admin.sock")
+        } else if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(".local/state/ssh-credential-broker/admin.sock")
+        } else {
+            let uid = unsafe { libc::geteuid() };
+            PathBuf::from(format!("/tmp/ssh-credential-broker-{uid}/admin.sock"))
+        }
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from("/private/var/db/ssh-credential-broker/run/admin.sock")
     } else {
-        "/run/ssh-credential-broker/admin.sock"
+        PathBuf::from("/run/ssh-credential-broker/admin.sock")
     }
 }
 
@@ -231,8 +242,11 @@ async fn execute(args: Args) -> Result<(), ErrorCode> {
         request,
     };
     envelope.validate().map_err(|_| ErrorCode::InputError)?;
+    let socket_path = args
+        .admin_socket
+        .unwrap_or_else(|| default_socket(args.standalone));
     let response: AdminResponse = tokio::time::timeout(Duration::from_secs(30), async {
-        let mut socket = UnixStream::connect(&args.admin_socket)
+        let mut socket = UnixStream::connect(&socket_path)
             .await
             .map_err(|_| ErrorCode::TransportFailure)?;
         write_frame(&mut socket, &envelope)

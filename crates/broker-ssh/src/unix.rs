@@ -18,8 +18,10 @@ use unix_io::{terminal_size, LocalIo, Terminal};
 #[derive(Parser)]
 #[command(version, about = "Execute through the isolated SSH credential broker")]
 struct Args {
-    #[arg(long, default_value = default_socket())]
-    socket: PathBuf,
+    #[arg(long)]
+    socket: Option<PathBuf>,
+    #[arg(long)]
+    standalone: bool,
     target: String,
     #[arg(long, default_value_t = 22)]
     port: u16,
@@ -31,11 +33,20 @@ struct Args {
     outcome_fd: Option<i32>,
 }
 
-fn default_socket() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "/private/var/db/ssh-credential-broker/run/exec.sock"
+fn default_socket(standalone: bool) -> PathBuf {
+    if standalone {
+        if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
+            PathBuf::from(runtime).join("ssh-credential-broker/exec.sock")
+        } else if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(".local/state/ssh-credential-broker/exec.sock")
+        } else {
+            let uid = unsafe { libc::geteuid() };
+            PathBuf::from(format!("/tmp/ssh-credential-broker-{uid}/exec.sock"))
+        }
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from("/private/var/db/ssh-credential-broker/run/exec.sock")
     } else {
-        "/run/ssh-credential-broker/exec.sock"
+        PathBuf::from("/run/ssh-credential-broker/exec.sock")
     }
 }
 
@@ -150,7 +161,14 @@ async fn execute(args: &Args) -> Result<Outcome, ErrorCode> {
         pty,
     };
     request.validate().map_err(|_| ErrorCode::InputError)?;
-    let stream = tokio::time::timeout(Duration::from_secs(30), UnixStream::connect(&args.socket))
+    let default_path;
+    let socket_path = if let Some(path) = args.socket.as_deref() {
+        path
+    } else {
+        default_path = default_socket(args.standalone);
+        &default_path
+    };
+    let stream = tokio::time::timeout(Duration::from_secs(30), UnixStream::connect(socket_path))
         .await
         .map_err(|_| ErrorCode::TransportFailure)?
         .map_err(|_| ErrorCode::TransportFailure)?;

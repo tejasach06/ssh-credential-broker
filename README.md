@@ -80,6 +80,36 @@ Windows fixes the harness SID at installation, so `unlock` has no `--harness-uid
 
 The installer excludes the three executable basenames from Windows Error Reporting and redirects application-specific LocalDumps to a protected deny-write directory. Existing application-specific settings cause refusal. Removal restores only the installer's settings. This does not prevent paging, hibernation, kernel dumps, external privileged dump tools, or administrator changes.
 
+
+## Standalone and portable mode
+
+For evaluation, single-user workflows, or portable usage without root or administrator access, `ssh-brokerd` can run directly in the foreground:
+
+```sh
+# Linux / macOS
+ssh-brokerd --standalone
+
+# Windows
+ssh-brokerd.exe --standalone
+```
+
+In standalone mode:
+- No systemd, launchd, or Windows Service Control Manager installation is required.
+- Sockets/pipes are created in unprivileged user space:
+  - **Linux / macOS**: `$XDG_RUNTIME_DIR/ssh-credential-broker/` or `~/.local/state/ssh-credential-broker/` with mode `0700` directory and `0600` sockets. Custom locations can be specified via `--runtime-dir`.
+  - **Windows**: Default local named pipes `\\.\pipe\ssh-credential-broker-standalone-admin` and `\\.\pipe\ssh-credential-broker-standalone-exec`. Custom pipe paths can be passed via `--admin-pipe` and `--exec-pipe`.
+- By default, operator and harness identities default to the running user's UID or SID.
+- Connect using the `--standalone` flag or custom socket/pipe flags on clients:
+  ```sh
+  # Administer
+  brokerctl --standalone unlock --credential-count 2 --ttl-seconds 1800
+  brokerctl --standalone status
+
+  # Execute
+  broker-ssh --standalone server.example -- 'uptime'
+  ```
+- For harness and AI agent integration details, see the agent skill in [`skills/ssh-broker/SKILL.md`](skills/ssh-broker/SKILL.md).
+- **Security note**: When running under a single user account, host-level kernel memory isolation between the harness and broker is not enforced. See [SECURITY.md](SECURITY.md).
 ## Unlock from the trusted operator session
 
 Use the installed binaries by absolute path, or add `/opt/ssh-credential-broker/bin` to your trusted shell's `PATH`. The examples below assume that directory is in `PATH`. Client default socket paths match the installed platform layout.

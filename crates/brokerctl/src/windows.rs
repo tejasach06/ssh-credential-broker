@@ -13,6 +13,12 @@ use std::time::Duration;
     about = "Trusted operator administration for the SSH credential broker"
 )]
 struct Args {
+    /// Connect to a custom operator administration named pipe
+    #[arg(long, global = true)]
+    admin_pipe: Option<String>,
+    /// Connect to the default standalone operator administration pipe
+    #[arg(long, global = true)]
+    standalone: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -170,7 +176,14 @@ async fn execute(args: Args) -> Result<(), ErrorCode> {
     };
     envelope.validate().map_err(|_| ErrorCode::InputError)?;
     let response: AdminResponse = tokio::time::timeout(Duration::from_secs(30), async {
-        let mut pipe = broker_windows::connect(broker_windows::ADMIN_PIPE)
+        let pipe_name = if let Some(pipe) = &args.admin_pipe {
+            pipe.as_str()
+        } else if args.standalone {
+            broker_windows::STANDALONE_ADMIN_PIPE
+        } else {
+            broker_windows::ADMIN_PIPE
+        };
+        let mut pipe = broker_windows::connect(pipe_name)
             .await
             .map_err(|_| ErrorCode::TransportFailure)?;
         write_frame(&mut pipe, &envelope)
@@ -215,5 +228,16 @@ mod tests {
             "--private-json-stdin"
         ])
         .is_err());
+    }
+    #[test]
+    fn args_supports_standalone_and_admin_pipe() {
+        assert!(Args::try_parse_from(["brokerctl", "--standalone", "status"]).is_ok());
+        assert!(Args::try_parse_from([
+            "brokerctl",
+            "--admin-pipe",
+            r"\\.\pipe\custom-admin",
+            "status"
+        ])
+        .is_ok());
     }
 }

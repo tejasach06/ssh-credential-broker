@@ -54,6 +54,7 @@ Every password submission consumes budget, including a successful cached login. 
 - Lock, expiry, cancellation, and daemon termination close broker-owned SSH transports. They do not guarantee remote process cleanup, undo remote changes, terminate detached processes, or remove access mechanisms created remotely.
 - Disconnecting SSH cannot recall a password already delivered to a transport or remote server.
 
+- **Standalone mode isolation limits**: In standalone mode (`--standalone`), `ssh-brokerd` runs directly as a standard user process without system service managers (systemd/launchd/Windows SCM). If the harness and daemon run under the same OS user account, the operating system kernel cannot prevent the harness from reading broker process memory, attaching a debugger (`ptrace`/`OpenProcess`), or intercepting user-owned socket files or named pipes. Standalone mode is intended for developer evaluation, single-user portable workflows, or environments where isolation is enforced externally (e.g. separate containers). For security isolation against a potentially compromised harness, production service mode with distinct operating system accounts is required.
 There is no forwarding, agent forwarding, X11 forwarding, SFTP, SCP, arbitrary subsystem access, public-key fallback, or keyboard-interactive fallback. Remote sudo and application password prompts receive no automatic broker assistance.
 
 ## Known dependency advisory

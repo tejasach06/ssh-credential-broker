@@ -25,6 +25,64 @@ pub fn harden() -> Result<u32, &'static str> {
     Ok(uid)
 }
 
+pub fn harden_standalone() -> Result<u32, &'static str> {
+    let uid = unsafe { libc::geteuid() };
+    let limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    let _ = unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) };
+    #[cfg(target_os = "linux")]
+    let _ = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    unsafe { libc::umask(0o077) };
+    Ok(uid)
+}
+
+pub fn default_standalone_runtime(uid: u32) -> PathBuf {
+    if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
+        PathBuf::from(runtime).join("ssh-credential-broker")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".local/state/ssh-credential-broker")
+    } else {
+        PathBuf::from(format!("/tmp/ssh-credential-broker-{uid}"))
+    }
+}
+
+pub fn secure_standalone_runtime(path: &Path, uid: u32) -> Result<PathBuf, &'static str> {
+    if !path.exists() {
+        fs::create_dir_all(path).map_err(|_| "cannot create standalone runtime directory")?;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|_| "runtime directory is missing")?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() || metadata.uid() != uid {
+        return Err("runtime directory must be owned by the current user and cannot be a symlink");
+    }
+    if metadata.mode() & 0o777 != 0o700 {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+    }
+    fs::canonicalize(path).map_err(|_| "runtime directory cannot be resolved")
+}
+
+pub fn listener_standalone(path: &Path, uid: u32) -> Result<UnixListener, &'static str> {
+    match fs::symlink_metadata(path) {
+        Ok(m) => {
+            if !m.file_type().is_socket() || m.uid() != uid {
+                return Err("existing socket path is not owned by current user");
+            }
+            if std::os::unix::net::UnixStream::connect(path).is_ok() {
+                return Err("another broker is already listening");
+            }
+            fs::remove_file(path).map_err(|_| "cannot remove stale socket")?;
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => return Err("cannot inspect socket"),
+    }
+    let listener = UnixListener::bind(path).map_err(|_| "cannot bind socket")?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|_| "cannot protect socket")?;
+    Ok(listener)
+}
+
 pub fn secure_runtime(path: &Path, uid: u32) -> Result<PathBuf, &'static str> {
     let metadata = fs::symlink_metadata(path).map_err(|_| "runtime directory is missing")?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() || metadata.uid() != uid {

@@ -1,5 +1,6 @@
 #![cfg(windows)]
 
+use std::borrow::Cow;
 use std::ffi::c_void;
 use std::future::Future;
 use std::io;
@@ -19,6 +20,8 @@ use windows_sys::Win32::System::Threading::*;
 pub const SERVICE_NAME: &str = "ssh-brokerd";
 pub const EXEC_PIPE: &str = r"\\.\pipe\ssh-credential-broker-exec";
 pub const ADMIN_PIPE: &str = r"\\.\pipe\ssh-credential-broker-admin";
+pub const STANDALONE_EXEC_PIPE: &str = r"\\.\pipe\ssh-credential-broker-standalone-exec";
+pub const STANDALONE_ADMIN_PIPE: &str = r"\\.\pipe\ssh-credential-broker-standalone-admin";
 // Generic write includes FILE_CREATE_PIPE_INSTANCE. Clients must never receive it.
 const CLIENT_ACCESS: u32 = 0x0012_019b;
 
@@ -107,6 +110,11 @@ pub fn service_sid() -> io::Result<String> {
         )
     })?;
     sid_string(sid.as_mut_ptr().cast())
+}
+
+pub fn current_user_sid() -> io::Result<String> {
+    let token = process_token(unsafe { GetCurrentProcess() }, TOKEN_QUERY)?;
+    token_user(token.as_raw_handle())
 }
 
 fn information(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<Vec<usize>> {
@@ -234,13 +242,18 @@ pub fn harden() -> io::Result<String> {
 }
 
 pub struct Listener {
-    name: &'static str,
+    name: Cow<'static, str>,
     security: Local,
 }
 
 impl Listener {
-    pub fn new(name: &'static str, principal: &str, service: &str) -> io::Result<Self> {
-        if name != EXEC_PIPE && name != ADMIN_PIPE {
+    pub fn new(
+        name: impl Into<Cow<'static, str>>,
+        principal: &str,
+        service: &str,
+    ) -> io::Result<Self> {
+        let name = name.into();
+        if !name.starts_with(r"\\.\pipe\") {
             return Err(denied());
         }
         let principal = canonical_sid(principal)?;
@@ -262,7 +275,7 @@ impl Listener {
                 .first_pipe_instance(first)
                 .reject_remote_clients(true)
                 .create_with_security_attributes_raw(
-                    self.name,
+                    self.name.as_ref(),
                     (&mut attributes as *mut SECURITY_ATTRIBUTES).cast(),
                 )
         }
@@ -300,12 +313,20 @@ pub async fn accept_identity(
     expected: &str,
     harness: bool,
 ) -> io::Result<()> {
+    accept_identity_options(pipe, expected, harness).await
+}
+
+pub async fn accept_identity_options(
+    pipe: &mut NamedPipeServer,
+    expected: &str,
+    require_unprivileged: bool,
+) -> io::Result<()> {
     tokio::time::timeout(Duration::from_secs(10), async {
         // ImpersonateNamedPipeClient identifies the token of the last read message.
         if pipe.read_u8().await? != 1 {
             return Err(denied());
         }
-        authorize(pipe, expected, harness)?;
+        authorize(pipe, expected, require_unprivileged)?;
         pipe.write_u8(1).await
     })
     .await
@@ -313,10 +334,26 @@ pub async fn accept_identity(
 }
 
 pub async fn connect(name: &str) -> io::Result<NamedPipeClient> {
-    if name != EXEC_PIPE && name != ADMIN_PIPE {
+    connect_with_expected(name, None).await
+}
+
+pub async fn connect_with_expected(
+    name: &str,
+    expected_sid: Option<&str>,
+) -> io::Result<NamedPipeClient> {
+    if !name.starts_with(r"\\.\pipe\") {
         return Err(denied());
     }
-    let expected = service_sid()?;
+    let expected = match expected_sid {
+        Some(sid) => canonical_sid(sid)?,
+        None => {
+            if name == EXEC_PIPE || name == ADMIN_PIPE {
+                service_sid()?
+            } else {
+                current_user_sid()?
+            }
+        }
+    };
     let name = wide(name);
     let mut pipe = loop {
         let handle = unsafe {
@@ -404,5 +441,51 @@ mod tests {
     #[test]
     fn client_cannot_create_pipe_instances() {
         assert_eq!(CLIENT_ACCESS & FILE_CREATE_PIPE_INSTANCE, 0);
+    }
+    #[test]
+    fn current_user_sid_is_valid() {
+        let sid = current_user_sid().expect("current user sid");
+        assert!(sid.starts_with("S-1-5-"));
+    }
+    #[test]
+    fn listener_rejects_non_pipe_names() {
+        let user = current_user_sid().expect("user sid");
+        assert!(Listener::new("invalid-name", &user, &user).is_err());
+        assert!(Listener::new(STANDALONE_ADMIN_PIPE, &user, &user).is_ok());
+    }
+    #[tokio::test]
+    async fn standalone_pipe_handshake_roundtrip() {
+        let user = current_user_sid().expect("user sid");
+        let pipe_name = format!(
+            r"\\.\pipe\ssh-broker-test-standalone-{}",
+            std::process::id()
+        );
+        let listener = Listener::new(pipe_name.clone(), &user, &user).expect("listener");
+        let mut server = listener.create(true).expect("server instance");
+
+        let expected_user = user.clone();
+        let server_task = tokio::spawn(async move {
+            server.connect().await.expect("server connect");
+            accept_identity_options(&mut server, &expected_user, false)
+                .await
+                .expect("accept identity");
+            let mut buf = [0u8; 4];
+            server.read_exact(&mut buf).await.expect("read from client");
+            assert_eq!(&buf, b"ping");
+            server.write_all(b"pong").await.expect("write to server");
+        });
+
+        let mut client = connect_with_expected(&pipe_name, Some(&user))
+            .await
+            .expect("client connect");
+        client.write_all(b"ping").await.expect("write to server");
+        let mut resp = [0u8; 4];
+        client
+            .read_exact(&mut resp)
+            .await
+            .expect("read from server");
+        assert_eq!(&resp, b"pong");
+
+        server_task.await.expect("server finished");
     }
 }

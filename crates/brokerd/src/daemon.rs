@@ -16,41 +16,97 @@ use tokio::sync::Semaphore;
 #[cfg(unix)]
 struct Options {
     #[arg(long)]
-    runtime_dir: PathBuf,
+    runtime_dir: Option<PathBuf>,
     #[arg(long)]
-    operator_uid: u32,
+    operator_uid: Option<u32>,
     #[arg(long)]
-    harness_uid: u32,
+    harness_uid: Option<u32>,
     #[arg(long)]
-    exec_gid: u32,
+    exec_gid: Option<u32>,
     #[arg(long)]
-    admin_gid: u32,
+    admin_gid: Option<u32>,
+    #[arg(long)]
+    standalone: bool,
 }
 
 #[cfg(unix)]
 pub async fn run() -> Result<(), &'static str> {
     let options = Options::parse();
-    let service_uid = platform::harden()?;
-    if options.harness_uid == 0
-        || options.harness_uid == options.operator_uid
-        || options.harness_uid == service_uid
-        || options.operator_uid == service_uid
-        || options.exec_gid == options.admin_gid
-    {
-        return Err(
-            "operator, harness, and service identities must be separate; harness must not be root",
-        );
-    }
-    let runtime = platform::secure_runtime(&options.runtime_dir, service_uid)?;
-    let exec_path = runtime.join("exec.sock");
-    let admin_path = runtime.join("admin.sock");
-    let execution = platform::listener(&exec_path, service_uid, options.exec_gid)?;
-    let administration = match platform::listener(&admin_path, service_uid, options.admin_gid) {
-        Ok(listener) => listener,
-        Err(e) => {
-            let _ = std::fs::remove_file(&exec_path);
-            return Err(e);
+    let (
+        _service_uid,
+        operator_uid,
+        harness_uid,
+        _runtime,
+        exec_path,
+        admin_path,
+        execution,
+        administration,
+    ) = if options.standalone {
+        let service_uid = platform::harden_standalone()?;
+        let operator_uid = service_uid;
+        let harness_uid = service_uid;
+        let runtime_dir = options
+            .runtime_dir
+            .unwrap_or_else(|| platform::default_standalone_runtime(service_uid));
+        let runtime = platform::secure_standalone_runtime(&runtime_dir, service_uid)?;
+        let exec_path = runtime.join("exec.sock");
+        let admin_path = runtime.join("admin.sock");
+        let execution = platform::listener_standalone(&exec_path, service_uid)?;
+        let administration = match platform::listener_standalone(&admin_path, service_uid) {
+            Ok(listener) => listener,
+            Err(e) => {
+                let _ = std::fs::remove_file(&exec_path);
+                return Err(e);
+            }
+        };
+        (
+            service_uid,
+            operator_uid,
+            harness_uid,
+            runtime,
+            exec_path,
+            admin_path,
+            execution,
+            administration,
+        )
+    } else {
+        let service_uid = platform::harden()?;
+        let runtime_dir = options.runtime_dir.ok_or("runtime_dir is required")?;
+        let operator_uid = options.operator_uid.ok_or("operator_uid is required")?;
+        let harness_uid = options.harness_uid.ok_or("harness_uid is required")?;
+        let exec_gid = options.exec_gid.ok_or("exec_gid is required")?;
+        let admin_gid = options.admin_gid.ok_or("admin_gid is required")?;
+        if harness_uid == 0
+            || harness_uid == operator_uid
+            || harness_uid == service_uid
+            || operator_uid == service_uid
+            || exec_gid == admin_gid
+        {
+            return Err(
+                "operator, harness, and service identities must be separate; harness must not be root",
+            );
         }
+        let runtime = platform::secure_runtime(&runtime_dir, service_uid)?;
+        let exec_path = runtime.join("exec.sock");
+        let admin_path = runtime.join("admin.sock");
+        let execution = platform::listener(&exec_path, service_uid, exec_gid)?;
+        let administration = match platform::listener(&admin_path, service_uid, admin_gid) {
+            Ok(listener) => listener,
+            Err(e) => {
+                let _ = std::fs::remove_file(&exec_path);
+                return Err(e);
+            }
+        };
+        (
+            service_uid,
+            operator_uid,
+            harness_uid,
+            runtime,
+            exec_path,
+            admin_path,
+            execution,
+            administration,
+        )
     };
     let _cleanup = platform::SocketCleanup(exec_path, admin_path);
     let state = Arc::new(StateEngine::new(32));
@@ -65,11 +121,11 @@ pub async fn run() -> Result<(), &'static str> {
             _ = tokio::signal::ctrl_c() => break,
             incoming = execution.accept() => {
                 let (stream, _) = incoming.map_err(|_| "execution socket failed")?;
-                if platform::peer_uid(&stream).ok() != Some(options.harness_uid) { continue; }
+                if platform::peer_uid(&stream).ok() != Some(harness_uid) { continue; }
                 let Ok(slot) = exec_slots.clone().try_acquire_owned() else { continue; };
                 let state = state.clone();
                 let operations = operations.clone();
-                let uid = options.harness_uid;
+                let uid = harness_uid;
                 tokio::spawn(async move {
                     let _slot = slot;
                     serve_execution(stream, state, uid, operations).await;
@@ -77,10 +133,10 @@ pub async fn run() -> Result<(), &'static str> {
             }
             incoming = administration.accept() => {
                 let (stream, _) = incoming.map_err(|_| "administration socket failed")?;
-                if platform::peer_uid(&stream).ok() != Some(options.operator_uid) { continue; }
+                if platform::peer_uid(&stream).ok() != Some(operator_uid) { continue; }
                 let Ok(slot) = admin_slots.clone().try_acquire_owned() else { continue; };
                 let state = state.clone();
-                let uid = options.harness_uid;
+                let uid = harness_uid;
                 tokio::spawn(async move {
                     let _slot = slot;
                     serve_admin(stream, state, uid).await;
