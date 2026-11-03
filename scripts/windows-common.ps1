@@ -21,7 +21,10 @@ function Assert-BrokerPlainPath([string] $Path) {
 }
 function Invoke-BrokerSc([string[]] $Arguments) {
     $output = & "$env:SystemRoot\System32\sc.exe" @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Service management failed (sc.exe exit $LASTEXITCODE); no command output is included." }
+    if ($LASTEXITCODE -ne 0) {
+        $subcmd = if ($Arguments.Count -gt 0) { $Arguments[0] } else { 'unknown' }
+        throw "Service management failed (sc.exe $subcmd exit $LASTEXITCODE); no command output is included."
+    }
 }
 function Set-BrokerDirectoryAcl([string] $Path, [string[]] $ReadSids = @(), [switch] $DenyWrite) {
     $acl = [Security.AccessControl.DirectorySecurity]::new()
