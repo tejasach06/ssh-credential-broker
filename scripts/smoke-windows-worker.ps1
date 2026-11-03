@@ -70,7 +70,9 @@ try {
         } | ConvertTo-Json -Compress -Depth 4
     } else { throw 'Unknown smoke operation.' }
 } catch {
-    # A native API/remote response can contain sensitive data. Never print exceptions.
-    [Console]::Out.WriteLine('{"ok":false,"error":"worker_operation_failed"}')
+    $ex = $_.Exception
+    while ($ex.InnerException) { $ex = $ex.InnerException }
+    $errJson = [ordered]@{ok=$false; error='worker_operation_failed'; exceptionType=$ex.GetType().FullName; scriptLine=$_.InvocationInfo.ScriptLineNumber} | ConvertTo-Json -Compress
+    [Console]::Out.WriteLine($errJson)
     exit 1
 } finally { if ($null -ne $inputBytes) { [Array]::Clear($inputBytes, 0, $inputBytes.Length) } }
