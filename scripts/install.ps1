@@ -86,9 +86,13 @@ try {
     Wait-BrokerServiceState 'Running'
     [ordered]@{ installed=$true; service=$script:BrokerService; root=$script:BrokerRoot; startsLocked=$true; wer='excluded; local dumps denied by managed sink ACL'; privilegeAudit='S4U effective SIDs plus local LSA rights; custom ACL/delegation and future changes require operator audit' } | ConvertTo-Json -Compress
 } catch {
+    $inner = $_.Exception
+    while ($inner.InnerException) { $inner = $inner.InnerException }
+    $installStage = if ($createdService) { 'service_configuration_or_startup' } elseif ($createdRoot) { 'directory_or_wer_configuration' } else { 'precondition' }
+    $installError = "install_stage_${installStage}: line $($_.InvocationInfo.ScriptLineNumber), $($inner.GetType().Name): $($_.FullyQualifiedErrorId)"
     if ($createdService) { Stop-Service -Name $script:BrokerService -ErrorAction SilentlyContinue; Set-Service -Name $script:BrokerService -StartupType Disabled -ErrorAction SilentlyContinue }
     if ($createdRoot -and -not (Test-Path -LiteralPath $record)) {
         if (@(Get-ChildItem -LiteralPath $script:BrokerRoot -Force).Count -eq 0) { Remove-Item -LiteralPath $script:BrokerRoot }
     }
-    throw 'Windows installation did not complete. Any managed partial installation remains stopped/disabled; use uninstall.ps1 to remove it. No account memberships were changed.'
+    throw "Windows installation did not complete ($installError). Any managed partial installation remains stopped/disabled; use uninstall.ps1 to remove it. No account memberships were changed."
 }
