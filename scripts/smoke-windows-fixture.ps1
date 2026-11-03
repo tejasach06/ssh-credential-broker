@@ -42,6 +42,15 @@ function Remove-FixtureTree([string] $Path) {
     }
     Remove-Item -LiteralPath $Path -Force
 }
+function Set-FixtureHostKeyAcl([string] $Path) {
+    $acl=[Security.AccessControl.FileSecurity]::new()
+    $acl.SetAccessRuleProtection($true,$false)
+    $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+    foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid),'FullControl','Allow'))
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
 try {
     $stage='prerequisite_native_helper_compilation'
     Add-Type -Path (Join-Path $PSScriptRoot 'windows-native.cs')
@@ -109,6 +118,7 @@ try {
     $hostKey=Join-Path $work 'host_ed25519'
     $generated=[BrokerWindowsNative]::RunPrivate($keygen,@('-q','-t','ed25519','-N','','-f',$hostKey),[byte[]]@(),$false,30)
     Assert-Fixture ($generated.ExitCode -eq 0)
+    Set-FixtureHostKeyAcl $hostKey
     $fingerprinted=[BrokerWindowsNative]::RunPrivate($keygen,@('-lf',($hostKey+'.pub'),'-E','sha256'),[byte[]]@(),$false,30)
     Assert-Fixture ($fingerprinted.ExitCode -eq 0)
     $fingerprint=([Text.Encoding]::UTF8.GetString($fingerprinted.Stdout) -split '\s+')[1]
@@ -210,6 +220,7 @@ try {
         $newKey=Join-Path $work 'host_ed25519_rotated'
         $generated=[BrokerWindowsNative]::RunPrivate($keygen,@('-q','-t','ed25519','-N','','-f',$newKey),[byte[]]@(),$false,30)
         if ($generated.ExitCode -ne 0) { throw 'fixture_rotation_failed' }
+        Set-FixtureHostKeyAcl $newKey
         $fingerprinted=[BrokerWindowsNative]::RunPrivate($keygen,@('-lf',($newKey+'.pub'),'-E','sha256'),[byte[]]@(),$false,30)
         if ($fingerprinted.ExitCode -ne 0) { throw 'fixture_rotation_failed' }
         $newPin=([Text.Encoding]::UTF8.GetString($fingerprinted.Stdout) -split '\s+')[1]
